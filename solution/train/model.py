@@ -705,5 +705,6 @@ class DependencyParser(Model):
         metrics = self._attachment_scores.get_metric(reset)
         metrics['GramValAcc'] = self._gram_val_prediction_accuracy.get_metric(reset)
         metrics['LemmaAcc'] = self._lemma_prediction_accuracy.get_metric(reset)
+        metrics['MeanAcc'] = (metrics['GramValAcc'] + metrics['LemmaAcc'] + metrics['LAS']) / 3.
 
         return metrics

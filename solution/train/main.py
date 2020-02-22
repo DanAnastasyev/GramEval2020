@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 
+import argparse
 import attr
 import json
 import logging
@@ -20,7 +21,7 @@ from allennlp.modules.seq2seq_encoders import Seq2SeqEncoder, PytorchSeq2SeqWrap
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders.elmo_token_embedder import ElmoTokenEmbedder
 from allennlp.modules.token_embedders.pretrained_transformer_mismatched_embedder import PretrainedTransformerMismatchedEmbedder
-from allennlp.training.learning_rate_schedulers.noam import NoamLR
+from allennlp.training.learning_rate_schedulers.slanted_triangular import SlantedTriangular
 from allennlp.training.trainer import Trainer
 
 from train.dataset_reader import UDDatasetReader
@@ -32,43 +33,109 @@ logger = logging.getLogger(__name__)
 
 
 @attr.s
-class Config(object):
-    model_name = attr.ib(default='ru_bert_parser_with_tagger')
-    embedder_name = attr.ib(default='ru_bert')
+class EmbedderConfig(object):
+    name = attr.ib(default='ru_bert')
+    dropout = attr.ib(default=0.4)
     use_pymorphy = attr.ib(default=False)
-    batch_size = attr.ib(default=32)
+
+
+@attr.s
+class EncoderConfig(object):
+    encoder_type = attr.ib(default='lstm', validator=attr.validators.in_(['lstm', 'none']))
+    lstm_dim = attr.ib(default=256)
+    lstm_num_layers = attr.ib(default=2)
+    lstm_dropout = attr.ib(default=0.3)
+
+
+@attr.s
+class ParserConfig(object):
+    dropout = attr.ib(default=0.1)
+    tag_representation_dim = attr.ib(default=128)
+    arc_representation_dim = attr.ib(default=512)
+
+
+@attr.s
+class TrainerConfig(object):
+    batch_size = attr.ib(default=128)
     num_epochs = attr.ib(default=15)
     patience = attr.ib(default=10)
+    num_gradient_accumulation_steps = attr.ib(default=1)
+
+
+@attr.s
+class DataConfig(object):
     data_dir = attr.ib(default='../data')
+    pretrained_models_dir = attr.ib(default='../pretrained_models')
+    models_dir = attr.ib(default='../models')
     train_data_all_except = attr.ib(default=None)
     train_data = attr.ib(default=['GramEval2020-GSD-train.conllu'])
     valid_data = attr.ib(default=['GramEval2020-GSD-wiki-dev.conllu'])
-    pretrained_models_dir = attr.ib(default='../pretrained_models')
-    models_dir = attr.ib(default='../models')
 
 
-_SAMPLE_DATA_CONFIG = Config()
+@attr.s
+class Config(object):
+    model_name = attr.ib(default='ru_bert_parser_with_tagger_pymorphy')
+    embedder = attr.ib(default=EmbedderConfig())
+    encoder = attr.ib(default=EncoderConfig())
+    parser = attr.ib(default=ParserConfig())
+    trainer = attr.ib(default=TrainerConfig())
+    data = attr.ib(default=DataConfig())
 
-_FULL_DATA_CONFIG = Config(
-    train_data_all_except=['GramEval2020-SynTagRus-train.conllu', 'GramEval2020-17cent-train.conllu'],
-    train_data=None,
-    valid_data='all'
-)
+    @classmethod
+    def load(cls, path):
+        with open(path) as f:
+            json_config = json.load(f)
+
+        model_name = json_config['model_name']
+        embedder = EmbedderConfig(**json_config['embedder'])
+        encoder = EncoderConfig(**json_config['encoder'])
+        parser = ParserConfig(**json_config['parser'])
+        trainer = TrainerConfig(**json_config['trainer'])
+        data = DataConfig(**json_config['data'])
+
+        return cls(
+            model_name=model_name,
+            embedder=embedder,
+            encoder=encoder,
+            parser=parser,
+            trainer=trainer,
+            data=data
+        )
+
+
+def build_config(config_dir, model, full_data):
+    config = Config.load(os.path.join(config_dir, model + '.json'))
+
+    if full_data:
+        config.data.train_data_all_except = ['GramEval2020-SynTagRus-train.conllu', 'GramEval2020-17cent-train.conllu']
+        config.data.train_data = None,
+        config.data.valid_data = 'all'
+
+    return config
 
 
 def _get_reader(config):
     indexer = None
-    if config.embedder_name == 'elmo':
+    if config.embedder.name == 'elmo':
         indexer = ELMoTokenCharactersIndexer()
-    elif config.embedder_name.endswith('bert'):
-        bert_path = os.path.join(config.pretrained_models_dir, config.embedder_name)
+    elif config.embedder.name.endswith('bert'):
+        bert_path = os.path.join(config.data.pretrained_models_dir, config.embedder.name)
         indexer = PretrainedTransformerMismatchedIndexer(
             model_name=bert_path, tokenizer_kwargs={'do_lower_case': False}
         )
-    else:
-        assert False, 'Unknown embedder {}'.format(config.embedder_name)
+    elif config.embedder.name == 'both':
+        elmo_indexer = ELMoTokenCharactersIndexer()
 
-    return UDDatasetReader({config.embedder_name: indexer})
+        bert_path = os.path.join(config.data.pretrained_models_dir, 'ru_bert')
+        bert_indexer = PretrainedTransformerMismatchedIndexer(
+            model_name=bert_path, tokenizer_kwargs={'do_lower_case': False}
+        )
+
+        return UDDatasetReader({'elmo': elmo_indexer, 'ru_bert': bert_indexer})
+    else:
+        assert False, 'Unknown embedder {}'.format(config.embedder.name)
+
+    return UDDatasetReader({config.embedder.name: indexer})
 
 
 def _load_train_data(config):
@@ -76,28 +143,28 @@ def _load_train_data(config):
 
     train_data, valid_data = [], []
 
-    if config.train_data_all_except:
-        for path in os.listdir(os.path.join(config.data_dir, 'data_train')):
-            if path not in config.train_data_all_except:
+    if config.data.train_data_all_except:
+        for path in os.listdir(os.path.join(config.data.data_dir, 'data_train')):
+            if path not in config.data.train_data_all_except:
                 if not path.endswith('.conllu'):
                     continue
                 logger.info('Loading train file %s', path)
-                train_data.extend(reader.read(os.path.join(config.data_dir, 'data_train', path)))
+                train_data.extend(reader.read(os.path.join(config.data.data_dir, 'data_train', path)))
     else:
-        for path in config.train_data:
+        for path in config.data.train_data:
             logger.info('Loading train file %s', path)
-            train_data.extend(reader.read(os.path.join(config.data_dir, 'data_train', path)))
+            train_data.extend(reader.read(os.path.join(config.data.data_dir, 'data_train', path)))
 
-    if config.valid_data == 'all':
-        for path in os.listdir(os.path.join(config.data_dir, 'data_open_test')):
+    if config.data.valid_data == 'all':
+        for path in os.listdir(os.path.join(config.data.data_dir, 'data_open_test')):
             if not path.endswith('.conllu'):
                 continue
             logger.info('Loading valid file %s', path)
-            valid_data.extend(reader.read(os.path.join(config.data_dir, 'data_open_test', path)))
+            valid_data.extend(reader.read(os.path.join(config.data.data_dir, 'data_open_test', path)))
     else:
-        for path in config.valid_data:
+        for path in config.data.valid_data:
             logger.info('Loading valid file %s', path)
-            valid_data.extend(reader.read(os.path.join(config.data_dir, 'data_open_test', path)))
+            valid_data.extend(reader.read(os.path.join(config.data.data_dir, 'data_open_test', path)))
 
     return train_data, valid_data
 
@@ -109,35 +176,35 @@ def _build_lemmatizer(train_data):
     return lemmatize_helper
 
 
-def _apply_lemmatizer(lemmatize_helper, data):
-    for instance in data:
-        lemmatize_rule_indices = lemmatize_helper.get_rule_indices(instance)
-        field = SequenceLabelField(lemmatize_rule_indices, instance.fields['words'], 'lemma_index_tags')
-        instance.add_field('lemma_indices', field)
-
-
-def _apply_morpho_vectorizer(morpho_vectorizer, data):
-    for instance in data:
-        grammar_matrix = morpho_vectorizer.vectorize_instance(instance)
-        instance.add_field('morpho_embedding', ArrayField(grammar_matrix))
-
-    return morpho_vectorizer
-
-
 def _load_embedder(config):
-    if config.embedder_name == 'elmo':
+    if config.embedder.name == 'elmo':
         embedder = ElmoTokenEmbedder(
-            options_file=os.path.join(config.pretrained_models_dir, 'elmo/options.json'),
-            weight_file=os.path.join(config.pretrained_models_dir, 'elmo/model.hdf5'),
-            dropout=0.3
+            options_file=os.path.join(config.data.pretrained_models_dir, 'elmo/options.json'),
+            weight_file=os.path.join(config.data.pretrained_models_dir, 'elmo/model.hdf5'),
+            dropout=0.
         )
         embedder.eval()
-    else:
+    elif config.embedder.name.endswith('bert'):
         embedder = PretrainedTransformerMismatchedEmbedder(
-            model_name=os.path.join(config.pretrained_models_dir, config.embedder_name)
+            model_name=os.path.join(config.data.pretrained_models_dir, config.embedder.name)
+        )
+    elif config.embedder.name == 'both':
+        elmo_embedder = ElmoTokenEmbedder(
+            options_file=os.path.join(config.data.pretrained_models_dir, 'elmo/options.json'),
+            weight_file=os.path.join(config.data.pretrained_models_dir, 'elmo/model.hdf5'),
+            dropout=0.
+        )
+        elmo_embedder.eval()
+
+        bert_embedder = PretrainedTransformerMismatchedEmbedder(
+            model_name=os.path.join(config.data.pretrained_models_dir, 'ru_bert')
         )
 
-    return BasicTextFieldEmbedder({config.embedder_name: embedder})
+        return BasicTextFieldEmbedder({'elmo': elmo_embedder, 'ru_bert': bert_embedder})
+    else:
+        assert False, 'Unknown embedder {}'.format(config.embedder.name)
+
+    return BasicTextFieldEmbedder({config.embedder.name: embedder})
 
 
 def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer):
@@ -145,29 +212,28 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer):
 
     # TODO: AWD-LSTM Dropout
     input_dim = embedder.get_output_dim()
-    if config.use_pymorphy:
+    if config.embedder.use_pymorphy:
         input_dim += morpho_vectorizer.morpho_vector_dim
 
     encoder = None
-    if config.embedder_name == 'elmo':
+    if config.encoder.encoder_type == 'lstm':
         encoder = PytorchSeq2SeqWrapper(
-            torch.nn.LSTM(input_dim, 256, num_layers=2, dropout=0.3, bidirectional=True, batch_first=True)
+            torch.nn.LSTM(input_dim, config.encoder.lstm_dim, num_layers=config.encoder.lstm_num_layers,
+                          dropout=config.encoder.lstm_dropout, bidirectional=True, batch_first=True)
         )
-    elif config.embedder_name.endswith('bert'):
-        encoder = PassThroughEncoder(input_dim=768)
     else:
-        assert False
+        encoder = PassThroughEncoder(input_dim=768)
 
     return DependencyParser(
         vocab=vocab,
         text_field_embedder=embedder,
         encoder=encoder,
         lemmatize_helper=lemmatize_helper,
-        morpho_vector_dim=morpho_vectorizer.morpho_vector_dim if config.use_pymorphy else 0,
-        tag_representation_dim=128,
-        arc_representation_dim=128,
-        dropout=0.,
-        input_dropout=0.3
+        morpho_vector_dim=morpho_vectorizer.morpho_vector_dim if config.embedder.use_pymorphy else 0,
+        tag_representation_dim=config.parser.tag_representation_dim,
+        arc_representation_dim=config.parser.arc_representation_dim,
+        dropout=config.parser.dropout,
+        input_dropout=config.embedder.dropout
     )
 
 
@@ -214,17 +280,31 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
     optimizer = optim.AdamW(model.parameters())
     scheduler = None
 
-    if config.embedder_name.endswith('bert'):
+    if config.embedder.name.endswith('bert') or config.embedder.name == 'both':
         non_bert_params = (
             param for name, param in model.named_parameters() if not name.startswith('text_field_embedder')
         )
 
         optimizer = optim.AdamW([
-            {'params': model.text_field_embedder.parameters(), 'lr': 1e-5},
-            {'params': non_bert_params, 'lr': 1e-3}
+            {'params': model.text_field_embedder.parameters(), 'lr': 1e-4},
+            {'params': non_bert_params, 'lr': 1e-3},
+            {'params': []}
         ])
 
-    iterator = BucketIterator(batch_size=config.batch_size)
+        scheduler = SlantedTriangular(
+            optimizer=optimizer,
+            num_epochs=config.trainer.num_epochs,
+            num_steps_per_epoch=len(train_data) / config.trainer.batch_size,
+            gradual_unfreezing=True,
+            discriminative_fine_tuning=True
+        )
+
+    logger.info('Trainable params:')
+    for name, param in model.named_parameters():
+        if param.requires_grad:
+            logger.info('\t' + name)
+
+    iterator = BucketIterator(batch_size=config.trainer.batch_size)
     iterator.index_with(vocab)
 
     if torch.cuda.is_available():
@@ -238,7 +318,7 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
     logger.info('Example batch:')
     _log_batch(next(iterator(train_data)))
 
-    if config.embedder_name.endswith('bert'):
+    if config.embedder.name.endswith('bert') or config.embedder.name == 'both':
         train_data = _filter_data(train_data, vocab)
         valid_data = _filter_data(valid_data, vocab)
 
@@ -248,32 +328,48 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
         iterator=iterator,
         train_dataset=train_data,
         validation_dataset=valid_data,
-        patience=config.patience,
-        num_epochs=config.num_epochs,
+        validation_metric='+MeanAcc',
+        patience=config.trainer.patience,
+        num_epochs=config.trainer.num_epochs,
         cuda_device=cuda_device,
         grad_clipping=5.,
         learning_rate_scheduler=scheduler,
-        serialization_dir=os.path.join(config.models_dir, config.model_name),
+        serialization_dir=os.path.join(config.data.models_dir, config.model_name),
         should_log_parameter_statistics=False,
-        should_log_learning_rate=True
+        should_log_learning_rate=True,
+        num_gradient_accumulation_steps=config.trainer.num_gradient_accumulation_steps
     )
 
 
 def main():
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
 
-    config = _FULL_DATA_CONFIG
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config-dir', default='train/configs')
+    parser.add_argument('--model', default='bert')
+    parser.add_argument('--full-data', default=False, action='store_true')
+    args = parser.parse_args()
+
+    config = build_config(args.config_dir, args.model, args.full_data)
+    logger.info('Config: %s', config)
+
+    model_dir = os.path.join(config.data.models_dir, config.model_name)
+    if not os.path.isdir(model_dir):
+        os.makedirs(model_dir)
+
+    with open(os.path.join(model_dir, 'config.json'), 'w') as f:
+        json.dump(attr.asdict(config), f, indent=2, ensure_ascii=False)
 
     train_data, valid_data = _load_train_data(config)
     logger.info('Train data size = %s, valid data size = %s', len(train_data), len(valid_data))
 
     lemmatize_helper = _build_lemmatizer(train_data)
-    _apply_lemmatizer(lemmatize_helper, chain(train_data, valid_data))
+    lemmatize_helper.apply_to_instances(chain(train_data, valid_data))
 
     morpho_vectorizer = None
-    if config.use_pymorphy:
+    if config.embedder.use_pymorphy:
         morpho_vectorizer = MorphoVectorizer()
-        _apply_morpho_vectorizer(morpho_vectorizer, chain(train_data, valid_data))
+        morpho_vectorizer.apply_to_instances(chain(train_data, valid_data))
 
     vocab = Vocabulary.from_instances(chain(train_data, valid_data))
     logger.info('Vocab = %s', vocab)
@@ -288,16 +384,9 @@ def main():
     except KeyboardInterrupt:
         logger.info('Early stopping was triggered...')
 
-    model_dir = os.path.join(config.models_dir, config.model_name)
-    if not os.path.isdir(model_dir):
-        os.makedirs(model_dir)
-
     torch.save(model.state_dict(), os.path.join(model_dir, 'model.pt'))
     vocab.save_to_files(os.path.join(model_dir, 'vocab'))
     lemmatize_helper.save(model_dir)
-
-    with open(os.path.join(model_dir, 'config.json'), 'w') as f:
-        json.dump(attr.asdict(config), f, indent=2, ensure_ascii=False)
 
 
 if __name__ == "__main__":

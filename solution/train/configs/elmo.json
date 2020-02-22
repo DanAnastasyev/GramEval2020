@@ -1,0 +1,32 @@
+{
+    "model_name": "elmo_parser_with_tagger",
+    "embedder": {
+      "name": "elmo",
+      "dropout": 0.3,
+      "use_pymorphy": false
+    },
+    "encoder": {
+      "encoder_type": "lstm",
+      "lstm_dim": 256,
+      "lstm_num_layers": 2,
+      "lstm_dropout": 0.3
+    },
+    "parser": {
+      "dropout": 0.1,
+      "tag_representation_dim": 128,
+      "arc_representation_dim": 512
+    },
+    "trainer": {
+      "batch_size": 128,
+      "num_epochs": 15,
+      "patience": 5
+    },
+    "data": {
+      "data_dir": "../data",
+      "pretrained_models_dir": "../pretrained_models",
+      "models_dir": "../models",
+      "train_data_all_except": null,
+      "train_data": ["GramEval2020-GSD-train.conllu"],
+      "valid_data": ["GramEval2020-GSD-wiki-dev.conllu"]
+    }
+  }

@@ -10,6 +10,8 @@ from os.path import commonprefix
 from collections import Counter, defaultdict
 from tqdm import tqdm
 
+from allennlp.data.fields import SequenceLabelField
+
 logger = logging.getLogger(__name__)
 
 
@@ -122,6 +124,12 @@ class LemmatizeHelper(object):
         lemma += rule.append_suffix
 
         return lemma
+
+    def apply_to_instances(self, instances):
+        for instance in tqdm(instances, 'Lemmatizer apply_to_instances'):
+            lemmatize_rule_indices = self.get_rule_indices(instance)
+            field = SequenceLabelField(lemmatize_rule_indices, instance.fields['words'], 'lemma_index_tags')
+            instance.add_field('lemma_indices', field)
 
     def save(self, dir_path):
         with open(os.path.join(dir_path, self._OUTPUT_FILE_NAME), 'w') as f:

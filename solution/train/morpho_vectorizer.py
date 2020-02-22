@@ -2,6 +2,12 @@
 
 import numpy as np
 import pymorphy2
+import logging
+
+from tqdm import tqdm
+from allennlp.data.fields import ArrayField
+
+logger = logging.getLogger(__name__)
 
 
 class MorphoVectorizer(object):
@@ -64,3 +70,8 @@ class MorphoVectorizer(object):
     def vectorize_instance(self, instance):
         meta = instance.fields['metadata']
         return np.array([self.vectorize_word(word) for word in meta['words']])
+
+    def apply_to_instances(self, instances):
+        for instance in tqdm(instances, 'MorphoVectorizer apply_to_instances'):
+            grammar_matrix = self.vectorize_instance(instance)
+            instance.add_field('morpho_embedding', ArrayField(grammar_matrix))
