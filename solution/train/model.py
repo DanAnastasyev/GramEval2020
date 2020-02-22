@@ -82,6 +82,7 @@ class DependencyParser(Model):
                  tag_representation_dim: int,
                  arc_representation_dim: int,
                  lemmatize_helper: LemmatizeHelper,
+                 morpho_vector_dim: int = 0,
                  tag_feedforward: FeedForward = None,
                  arc_feedforward: FeedForward = None,
                  pos_tag_embedding: Embedding = None,
@@ -129,7 +130,7 @@ class DependencyParser(Model):
         self._gram_val_output = torch.nn.Linear(encoder_dim, self.vocab.get_vocab_size("grammar_value_tags"))
         self._lemma_output = torch.nn.Linear(encoder_dim, len(lemmatize_helper))
 
-        representation_dim = text_field_embedder.get_output_dim()
+        representation_dim = text_field_embedder.get_output_dim() + morpho_vector_dim
         if pos_tag_embedding is not None:
             representation_dim += pos_tag_embedding.get_output_dim()
 
@@ -159,6 +160,7 @@ class DependencyParser(Model):
     def forward(self,  # type: ignore
                 words: Dict[str, torch.LongTensor],
                 metadata: List[Dict[str, Any]],
+                morpho_embedding: torch.FloatTensor = None,
                 pos_tags: torch.LongTensor = None,
                 head_tags: torch.LongTensor = None,
                 head_indices: torch.LongTensor = None,
@@ -215,6 +217,10 @@ class DependencyParser(Model):
             A mask denoting the padded elements in the batch.
         """
         embedded_text_input = self.text_field_embedder(words)
+
+        if morpho_embedding is not None:
+            embedded_text_input = torch.cat([embedded_text_input, morpho_embedding], -1)
+
         if pos_tags is not None and self._pos_tag_embedding is not None:
             embedded_pos_tags = self._pos_tag_embedding(pos_tags)
             embedded_text_input = torch.cat([embedded_text_input, embedded_pos_tags], -1)
@@ -263,7 +269,9 @@ class DependencyParser(Model):
             words, length = output_dict["words"][instance_index], lengths[instance_index]
             gram_vals, lemmas = predicted_gram_vals[instance_index], predicted_lemmas[instance_index]
 
-            assert len(words) == len(gram_vals) == len(lemmas) == length.item() - 1
+            words = words[: length.item() - 1]
+            gram_vals = gram_vals[: length.item() - 1]
+            lemmas = lemmas[: length.item() - 1]
 
             instance_heads = list(instance_heads[1:length])
             instance_tags = instance_tags[1:length]

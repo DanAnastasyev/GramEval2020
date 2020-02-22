@@ -80,23 +80,6 @@ class LemmatizeHelper(object):
     def __len__(self):
         return len(self._lemmatize_rules)
 
-    def save(self, dir_path):
-        with open(os.path.join(dir_path, self._OUTPUT_FILE_NAME), 'w') as f:
-            index_to_rule = [attr.asdict(rule) for rule in self._index_to_rule]
-            json.dump(index_to_rule, f, indent=2, ensure_ascii=False)
-
-    @classmethod
-    def load(cls, dir_path):
-        with open(os.path.join(dir_path, cls._OUTPUT_FILE_NAME)) as f:
-            index_to_rule = json.load(f)
-
-        lemmatize_rules = {
-            LemmatizeRule(**rule_dict): index
-            for index, rule_dict in enumerate(index_to_rule)
-        }
-
-        return cls(lemmatize_rules)
-
     @staticmethod
     def predict_lemmatize_rule(word: str, lemma: str):
         def _predict_lemmatize_rule(word: str, lemma: str, **kwargs):
@@ -139,3 +122,20 @@ class LemmatizeHelper(object):
         lemma += rule.append_suffix
 
         return lemma
+
+    def save(self, dir_path):
+        with open(os.path.join(dir_path, self._OUTPUT_FILE_NAME), 'w') as f:
+            index_to_rule = [attr.asdict(rule) for rule in self._index_to_rule]
+            json.dump(index_to_rule, f, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def load(cls, dir_path):
+        with open(os.path.join(dir_path, cls._OUTPUT_FILE_NAME)) as f:
+            index_to_rule = json.load(f)
+
+        lemmatize_rules = {
+            LemmatizeRule(**rule_dict): index
+            for index, rule_dict in enumerate(index_to_rule)
+        }
+
+        return cls(lemmatize_rules)
