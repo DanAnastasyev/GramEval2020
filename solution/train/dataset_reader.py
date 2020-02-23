@@ -19,15 +19,29 @@ logger = logging.getLogger(__name__)
 
 @DatasetReader.register('ud')
 class UDDatasetReader(DatasetReader):
-    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, **kwargs) -> None:
+    def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, skip_labels=False,
+                 max_length=None, read_first=None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._token_indexers = token_indexers or {'tokens': SingleIdTokenIndexer()}
+        self._skip_labels = skip_labels
+        self._max_length = max_length
+        self._read_first = read_first
 
     @overrides
     def _read(self, file_path: str):
         with CorpusIterator(file_path) as corpus:
-            for sentence in corpus:
+            for sent_index, sentence in enumerate(corpus):
+                if self._max_length is not None and len(sentence) > self._max_length:
+                    logger.info(
+                        'Filtering out %s as too long in tokens (%s > %s)',
+                        sentence.words, len(sentence), self._max_length
+                    )
+                    continue
+
                 yield self.text_to_instance(sentence)
+
+                if self._read_first is not None and sent_index + 1 == self._read_first:
+                    return
 
     @overrides
     def text_to_instance(self, sentence: CorpusSentence) -> Instance:
@@ -39,20 +53,21 @@ class UDDatasetReader(DatasetReader):
         fields['words'] = text_field
         metadata['words'] = sentence.words
 
-        if sentence.lemmas:
+        if sentence.lemmas and not self._skip_labels:
             metadata['lemmas'] = sentence.lemmas
 
         if sentence.pos_tags:
-            fields['pos_tags'] = SequenceLabelField(sentence.pos_tags, text_field, 'pos')
+            if not self._skip_labels:
+                fields['pos_tags'] = SequenceLabelField(sentence.pos_tags, text_field, 'pos')
             metadata['pos'] = sentence.pos_tags
 
-        if sentence.grammar_values:
+        if sentence.grammar_values and not self._skip_labels:
             fields['grammar_values'] = SequenceLabelField(sentence.grammar_values, text_field, 'grammar_value_tags')
 
-        if sentence.heads:
+        if sentence.heads and not self._skip_labels:
             fields['head_indices'] = SequenceLabelField(sentence.heads, text_field, 'head_index_tags')
 
-        if sentence.head_tags:
+        if sentence.head_tags and not self._skip_labels:
             fields['head_tags'] = SequenceLabelField(sentence.head_tags, text_field, 'head_tags')
 
         fields["metadata"] = MetadataField(metadata)

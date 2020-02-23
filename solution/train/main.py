@@ -17,7 +17,7 @@ from allennlp.data.iterators import BasicIterator, BucketIterator
 from allennlp.data.token_indexers.elmo_indexer import ELMoTokenCharactersIndexer
 from allennlp.data.token_indexers.pretrained_transformer_mismatched_indexer import PretrainedTransformerMismatchedIndexer
 from allennlp.data.vocabulary import Vocabulary
-from allennlp.modules.seq2seq_encoders import Seq2SeqEncoder, PytorchSeq2SeqWrapper, PassThroughEncoder
+from allennlp.modules.seq2seq_encoders import PassThroughEncoder, PytorchSeq2SeqWrapper
 from allennlp.modules.text_field_embedders import BasicTextFieldEmbedder
 from allennlp.modules.token_embedders.elmo_token_embedder import ElmoTokenEmbedder
 from allennlp.modules.token_embedders.pretrained_transformer_mismatched_embedder import PretrainedTransformerMismatchedEmbedder
@@ -26,7 +26,7 @@ from allennlp.training.trainer import Trainer
 
 from train.dataset_reader import UDDatasetReader
 from train.lemmatize_helper import LemmatizeHelper
-from train.model import DependencyParser
+from train.model import DependencyParser, LstmWeightDropSeq2SeqEncoder
 from train.morpho_vectorizer import MorphoVectorizer
 
 logger = logging.getLogger(__name__)
@@ -42,9 +42,11 @@ class EmbedderConfig(object):
 @attr.s
 class EncoderConfig(object):
     encoder_type = attr.ib(default='lstm', validator=attr.validators.in_(['lstm', 'none']))
-    lstm_dim = attr.ib(default=256)
-    lstm_num_layers = attr.ib(default=2)
-    lstm_dropout = attr.ib(default=0.3)
+    hidden_dim = attr.ib(default=256)
+    num_layers = attr.ib(default=2)
+    dropout = attr.ib(default=0.3)
+    variational_dropout = attr.ib(default=0.3)
+    use_weight_drop = attr.ib(default=False)
 
 
 @attr.s
@@ -52,6 +54,8 @@ class ParserConfig(object):
     dropout = attr.ib(default=0.1)
     tag_representation_dim = attr.ib(default=128)
     arc_representation_dim = attr.ib(default=512)
+    gram_val_representation_dim = attr.ib(default=-1)
+    lemma_representation_dim = attr.ib(default=-1)
 
 
 @attr.s
@@ -59,6 +63,11 @@ class TrainerConfig(object):
     batch_size = attr.ib(default=128)
     num_epochs = attr.ib(default=15)
     patience = attr.ib(default=10)
+    lr = attr.ib(default=1e-3)
+    bert_lr = attr.ib(default=1e-4)
+    cut_frac = attr.ib(default=0.1)
+    gradual_unfreezing = attr.ib(default=True)
+    discriminative_fine_tuning = attr.ib(default=True)
     num_gradient_accumulation_steps = attr.ib(default=1)
 
 
@@ -103,7 +112,7 @@ class Config(object):
         )
 
 
-def build_config(config_dir, model, full_data):
+def build_config(config_dir, model, full_data, pretrained_models_dir=None, models_dir=None):
     config = Config.load(os.path.join(config_dir, model + '.json'))
 
     if full_data:
@@ -111,10 +120,16 @@ def build_config(config_dir, model, full_data):
         config.data.train_data = None,
         config.data.valid_data = 'all'
 
+    if pretrained_models_dir:
+        config.data.pretrained_models_dir = pretrained_models_dir
+
+    if models_dir:
+        config.data.models_dir = models_dir
+
     return config
 
 
-def _get_reader(config):
+def _get_reader(config, skip_labels=False, max_length=150, read_first=None):
     indexer = None
     if config.embedder.name == 'elmo':
         indexer = ELMoTokenCharactersIndexer()
@@ -131,11 +146,13 @@ def _get_reader(config):
             model_name=bert_path, tokenizer_kwargs={'do_lower_case': False}
         )
 
-        return UDDatasetReader({'elmo': elmo_indexer, 'ru_bert': bert_indexer})
+        return UDDatasetReader({'elmo': elmo_indexer, 'ru_bert': bert_indexer}, skip_labels=skip_labels,
+                               max_length=max_length, read_first=read_first)
     else:
         assert False, 'Unknown embedder {}'.format(config.embedder.name)
 
-    return UDDatasetReader({config.embedder.name: indexer})
+    return UDDatasetReader({config.embedder.name: indexer}, skip_labels=skip_labels,
+                           max_length=max_length, read_first=read_first)
 
 
 def _load_train_data(config):
@@ -210,19 +227,23 @@ def _load_embedder(config):
 def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer):
     embedder = _load_embedder(config)
 
-    # TODO: AWD-LSTM Dropout
     input_dim = embedder.get_output_dim()
     if config.embedder.use_pymorphy:
         input_dim += morpho_vectorizer.morpho_vector_dim
 
     encoder = None
-    if config.encoder.encoder_type == 'lstm':
-        encoder = PytorchSeq2SeqWrapper(
-            torch.nn.LSTM(input_dim, config.encoder.lstm_dim, num_layers=config.encoder.lstm_num_layers,
-                          dropout=config.encoder.lstm_dropout, bidirectional=True, batch_first=True)
+    if config.encoder.encoder_type != 'lstm':
+        encoder = PassThroughEncoder(input_dim=input_dim)
+    elif config.encoder.use_weight_drop:
+        encoder = LstmWeightDropSeq2SeqEncoder(
+            input_dim, config.encoder.hidden_dim, num_layers=config.encoder.num_layers, bidirectional=True,
+            dropout=config.encoder.dropout, variational_dropout=config.encoder.variational_dropout
         )
     else:
-        encoder = PassThroughEncoder(input_dim=768)
+        encoder = PytorchSeq2SeqWrapper(torch.nn.LSTM(
+            input_dim, config.encoder.hidden_dim, num_layers=config.encoder.num_layers,
+            dropout=config.encoder.dropout, bidirectional=True, batch_first=True
+        ))
 
     return DependencyParser(
         vocab=vocab,
@@ -233,7 +254,9 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer):
         tag_representation_dim=config.parser.tag_representation_dim,
         arc_representation_dim=config.parser.arc_representation_dim,
         dropout=config.parser.dropout,
-        input_dropout=config.embedder.dropout
+        input_dropout=config.embedder.dropout,
+        gram_val_representation_dim=config.parser.gram_val_representation_dim,
+        lemma_representation_dim=config.parser.lemma_representation_dim
     )
 
 
@@ -259,7 +282,14 @@ def _log_batch(batch):
 def _filter_data(data, vocab):
     def _is_correct_instance(batch):
         assert len(batch['words']['ru_bert']['offsets']) == 1
-        return all(begin <= end for begin, end in batch['words']['ru_bert']['offsets'][0])
+
+        if batch['words']['ru_bert']['token_ids'].shape[1] > 256:
+            return False
+
+        return all(
+            begin <= end < batch['words']['ru_bert']['token_ids'].shape[1]
+            for begin, end in batch['words']['ru_bert']['offsets'][0]
+        )
 
     iterator = BasicIterator(batch_size=1)
     iterator.index_with(vocab)
@@ -277,7 +307,7 @@ def _filter_data(data, vocab):
 
 
 def _build_trainer(config, model, vocab, train_data, valid_data):
-    optimizer = optim.AdamW(model.parameters())
+    optimizer = optim.AdamW(model.parameters(), lr=config.trainer.lr)
     scheduler = None
 
     if config.embedder.name.endswith('bert') or config.embedder.name == 'both':
@@ -286,8 +316,8 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
         )
 
         optimizer = optim.AdamW([
-            {'params': model.text_field_embedder.parameters(), 'lr': 1e-4},
-            {'params': non_bert_params, 'lr': 1e-3},
+            {'params': model.text_field_embedder.parameters(), 'lr': config.trainer.bert_lr},
+            {'params': non_bert_params, 'lr': config.trainer.lr},
             {'params': []}
         ])
 
@@ -295,8 +325,9 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
             optimizer=optimizer,
             num_epochs=config.trainer.num_epochs,
             num_steps_per_epoch=len(train_data) / config.trainer.batch_size,
-            gradual_unfreezing=True,
-            discriminative_fine_tuning=True
+            cut_frac=config.trainer.cut_frac,
+            gradual_unfreezing=config.trainer.gradual_unfreezing,
+            discriminative_fine_tuning=config.trainer.discriminative_fine_tuning
         )
 
     logger.info('Trainable params:')
@@ -336,7 +367,7 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
         learning_rate_scheduler=scheduler,
         serialization_dir=os.path.join(config.data.models_dir, config.model_name),
         should_log_parameter_statistics=False,
-        should_log_learning_rate=True,
+        should_log_learning_rate=False,
         num_gradient_accumulation_steps=config.trainer.num_gradient_accumulation_steps
     )
 
@@ -347,10 +378,12 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--config-dir', default='train/configs')
     parser.add_argument('--model', default='bert')
+    parser.add_argument('--pretrained-models-dir', default=None)
+    parser.add_argument('--models-dir', default=None)
     parser.add_argument('--full-data', default=False, action='store_true')
     args = parser.parse_args()
 
-    config = build_config(args.config_dir, args.model, args.full_data)
+    config = build_config(args.config_dir, args.model, args.full_data, args.pretrained_models_dir, args.models_dir)
     logger.info('Config: %s', config)
 
     model_dir = os.path.join(config.data.models_dir, config.model_name)
@@ -378,15 +411,14 @@ def main():
     model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
     logger.info('Model:\n%s', model)
 
+    vocab.save_to_files(os.path.join(model_dir, 'vocab'))
+    lemmatize_helper.save(model_dir)
+
     trainer = _build_trainer(config, model, vocab, train_data, valid_data)
     try:
         trainer.train()
     except KeyboardInterrupt:
         logger.info('Early stopping was triggered...')
-
-    torch.save(model.state_dict(), os.path.join(model_dir, 'model.pt'))
-    vocab.save_to_files(os.path.join(model_dir, 'vocab'))
-    lemmatize_helper.save(model_dir)
 
 
 if __name__ == "__main__":

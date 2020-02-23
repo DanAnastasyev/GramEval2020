@@ -53,6 +53,9 @@ class Sentence(object):
             return None
         return [token.head_tag for token in self._tokens]
 
+    def __len__(self):
+        return len(self._tokens)
+
 
 class CorpusIterator:
     def __init__(self, path: str, separator: str='\t', token_col_index: int=1, lemma_col_index: int=2,
@@ -95,50 +98,52 @@ class CorpusIterator:
     def __iter__(self):
         return self
 
+    def _read_token(self, line):
+        fields = line.split(self._separator)
+
+        token_text = fields[self._token_col_index]
+        lemma, pos_tag, grammar_value, head, head_tag = None, None, None, None, None
+
+        if self._lemma_col_index is not None and self._lemma_col_index < len(fields):
+            lemma = fields[self._lemma_col_index]
+
+        if (self._grammar_val_col_indices is not None
+            and all(index < len(fields) for index in self._grammar_val_col_indices)
+        ):
+            grammar_value = '|'.join(chain(*(sorted(fields[col_index].split(self._grammemes_separator))
+                                                for col_index in self._grammar_val_col_indices)))
+
+        if self._grammar_val_col_indices and self._grammar_val_col_indices[0] < len(fields):
+            pos_tag = fields[self._grammar_val_col_indices[0]]
+
+        if self._head_col_index is not None and self._head_col_index < len(fields):
+            head = int(fields[self._head_col_index])
+
+        if self._head_tag_col_index is not None and self._head_tag_col_index < len(fields):
+            head_tag = fields[self._head_tag_col_index]
+
+        return Token(
+            text=token_text,
+            lemma=lemma,
+            pos_tag=pos_tag,
+            grammar_value=grammar_value,
+            head=head,
+            head_tag=head_tag
+        )
+
     def __next__(self) -> Sentence:
-        sentence = []
-        for line in self._file:
-            line = line.rstrip()
+        while True:
+            sentence = []
+            for line in self._file:
+                line = line.rstrip()
+                if line.startswith(self._skip_line_prefix):
+                    continue
+                if len(line) == 0:
+                    break
 
-            if line.startswith(self._skip_line_prefix):
-                continue
+                sentence.append(self._read_token(line))
+            else:
+                raise StopIteration
 
-            if len(line) == 0:
-                break
-
-            fields = line.split(self._separator)
-
-            token_text = fields[self._token_col_index]
-            lemma, pos_tag, grammar_value, head, head_tag = None, None, None, None, None
-
-            if self._lemma_col_index is not None and self._lemma_col_index < len(fields):
-                lemma = fields[self._lemma_col_index]
-
-            if (self._grammar_val_col_indices is not None
-                and all(index < len(fields) for index in self._grammar_val_col_indices)
-            ):
-                grammar_value = '|'.join(chain(*(sorted(fields[col_index].split(self._grammemes_separator))
-                                                 for col_index in self._grammar_val_col_indices)))
-
-            if self._grammar_val_col_indices and self._grammar_val_col_indices[0] < len(fields):
-                pos_tag = fields[self._grammar_val_col_indices[0]]
-
-            if self._head_col_index is not None and self._head_col_index < len(fields):
-                head = int(fields[self._head_col_index])
-
-            if self._head_tag_col_index is not None and self._head_tag_col_index < len(fields):
-                head_tag = fields[self._head_tag_col_index]
-
-            sentence.append(Token(
-                text=token_text,
-                lemma=lemma,
-                pos_tag=pos_tag,
-                grammar_value=grammar_value,
-                head=head,
-                head_tag=head_tag
-            ))
-
-        if sentence:
-            return Sentence(sentence)
-        else:
-            raise StopIteration
+            if sentence:
+                return Sentence(sentence)

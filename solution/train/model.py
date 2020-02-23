@@ -14,6 +14,7 @@ from allennlp.modules import Seq2SeqEncoder, TextFieldEmbedder, Embedding, Input
 from allennlp.modules.matrix_attention.bilinear_matrix_attention import BilinearMatrixAttention
 from allennlp.modules import FeedForward
 from allennlp.models.model import Model
+from allennlp.modules.seq2seq_encoders import PytorchSeq2SeqWrapper
 from allennlp.nn import InitializerApplicator, RegularizerApplicator, Activation
 from allennlp.nn.util import get_text_field_mask, get_range_vector
 from allennlp.nn.util import get_device_of, masked_log_softmax, get_lengths_from_binary_sequence_mask
@@ -25,6 +26,105 @@ from train.lemmatize_helper import LemmatizeHelper
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 POS_TO_IGNORE = {'``', "''", ':', ',', '.', 'PU', 'PUNCT', 'SYM'}
+
+
+class WeightDrop(torch.nn.Module):
+    def __init__(self, module, dropout, layer_names=['weight_hh_l0']):
+        super().__init__()
+
+        self.module, self.dropout, self.layer_names = module, dropout, layer_names
+        for layer in self.layer_names:
+            w = getattr(self.module, layer)
+            self.register_parameter('{}_raw'.format(layer), torch.nn.Parameter(w.data))
+            self.module._parameters[layer] = F.dropout(w, p=self.dropout, training=False)
+
+    def _setweights(self):
+        for layer in self.layer_names:
+            raw_w = getattr(self, '{}_raw'.format(layer))
+            self.module._parameters[layer] = F.dropout(raw_w, p=self.dropout, training=self.training)
+
+    def forward(self, *args):
+        self._setweights()
+        return self.module.forward(*args)
+
+    def reset(self):
+        for layer in self.layer_names:
+            raw_w = getattr(self, '{}_raw'.format(layer))
+            self.module._parameters[layer] = F.dropout(raw_w, p=self.dropout, training=False)
+        if hasattr(self.module, 'reset'):
+            self.module.reset()
+
+
+class LstmWeightDrop(torch.nn.Module):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        bias: bool = True,
+        dropout: float = 0.0,
+        variational_dropout: float = 0.0,
+        bidirectional: bool = False
+    ):
+        super().__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.bidirectional = bidirectional
+
+        rnns = []
+        rnns.append(torch.nn.LSTM(
+            input_size=input_size, hidden_size=hidden_size, num_layers=1,
+            bias=bias, batch_first=True, dropout=dropout, bidirectional=bidirectional
+        ))
+
+        input_size = hidden_size * (2 if bidirectional else 1)
+        for _ in range(num_layers - 1):
+            rnns.append(torch.nn.LSTM(
+                input_size=input_size, hidden_size=hidden_size, num_layers=1,
+                bias=bias, batch_first=True, dropout=dropout, bidirectional=bidirectional
+            ))
+
+        rnns = [WeightDrop(rnn, dropout=variational_dropout) for rnn in rnns]
+        self._rnns = torch.nn.ModuleList(rnns)
+
+    def forward(self, inputs, hidden_state):
+        outputs = inputs
+        hidden_states = []
+        for rnn in self._rnns:
+            outputs, hidden_state = rnn(outputs)
+            hidden_states.append(hidden_state)
+
+        h_n = torch.cat([h for h, c in hidden_states], dim=0)
+        c_n = torch.cat([c for h, c in hidden_states], dim=0)
+
+        return outputs, (h_n, c_n)
+
+
+@Seq2SeqEncoder.register("lstm_weight_drop")
+class LstmWeightDropSeq2SeqEncoder(PytorchSeq2SeqWrapper):
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_layers: int = 1,
+        bias: bool = True,
+        dropout: float = 0.0,
+        variational_dropout: float = 0.0,
+        bidirectional: bool = False,
+        stateful: bool = False,
+    ):
+        module = LstmWeightDrop(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            bias=bias,
+            dropout=dropout,
+            variational_dropout=variational_dropout,
+            bidirectional=bidirectional,
+        )
+        super().__init__(module=module, stateful=stateful)
+
 
 @Model.register("e2e_parser")
 class DependencyParser(Model):
@@ -83,6 +183,8 @@ class DependencyParser(Model):
                  arc_representation_dim: int,
                  lemmatize_helper: LemmatizeHelper,
                  morpho_vector_dim: int = 0,
+                 gram_val_representation_dim: int = -1,
+                 lemma_representation_dim: int = -1,
                  tag_feedforward: FeedForward = None,
                  arc_feedforward: FeedForward = None,
                  pos_tag_embedding: Embedding = None,
@@ -126,9 +228,25 @@ class DependencyParser(Model):
         self._input_dropout = Dropout(input_dropout)
         self._head_sentinel = torch.nn.Parameter(torch.randn([1, 1, encoder.get_output_dim()]))
 
-        # TODO: Maybe add more layers/dropout
-        self._gram_val_output = torch.nn.Linear(encoder_dim, self.vocab.get_vocab_size("grammar_value_tags"))
-        self._lemma_output = torch.nn.Linear(encoder_dim, len(lemmatize_helper))
+        if gram_val_representation_dim <= 0:
+            self._gram_val_output = torch.nn.Linear(encoder_dim, self.vocab.get_vocab_size("grammar_value_tags"))
+        else:
+            self._gram_val_output = torch.nn.Sequential(
+                Dropout(dropout),
+                torch.nn.Linear(encoder_dim, gram_val_representation_dim),
+                Dropout(dropout),
+                torch.nn.Linear(gram_val_representation_dim, self.vocab.get_vocab_size("grammar_value_tags"))
+            )
+
+        if lemma_representation_dim <= 0:
+            self._lemma_output = torch.nn.Linear(encoder_dim, len(lemmatize_helper))
+        else:
+            self._lemma_output = torch.nn.Sequential(
+                Dropout(dropout),
+                torch.nn.Linear(encoder_dim, lemma_representation_dim),
+                Dropout(dropout),
+                torch.nn.Linear(lemma_representation_dim, len(lemmatize_helper))
+            )
 
         representation_dim = text_field_embedder.get_output_dim() + morpho_vector_dim
         if pos_tag_embedding is not None:
@@ -156,7 +274,7 @@ class DependencyParser(Model):
 
         initializer(self)
 
-    @overrides
+    # @overrides
     def forward(self,  # type: ignore
                 words: Dict[str, torch.LongTensor],
                 metadata: List[Dict[str, Any]],
@@ -251,7 +369,7 @@ class DependencyParser(Model):
 
         return output_dict
 
-    @overrides
+    # @overrides
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
 
         head_tags = output_dict.pop("head_tags").cpu().detach().numpy()
@@ -700,7 +818,7 @@ class DependencyParser(Model):
             new_mask = new_mask * (1 - label_mask)
         return new_mask
 
-    @overrides
+    # @overrides
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         metrics = self._attachment_scores.get_metric(reset)
         metrics['GramValAcc'] = self._gram_val_prediction_accuracy.get_metric(reset)

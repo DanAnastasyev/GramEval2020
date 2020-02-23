@@ -24,6 +24,8 @@ def main():
     parser.add_argument('--model-name')
     parser.add_argument('--data-dir', default='../data/test_data')
     parser.add_argument('--predictions-dir', default='../predictions')
+    parser.add_argument('--batch-size', default=128, type=int)
+    parser.add_argument('--checkpoint-name', default='best.th')
     args = parser.parse_args()
 
     model_dir = os.path.join('../models', args.model_name)
@@ -42,12 +44,11 @@ def main():
     morpho_vectorizer = MorphoVectorizer() if config.embedder.use_pymorphy else None
 
     model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer).to(device)
-    model.load_state_dict(torch.load(os.path.join(model_dir, 'best.th'), map_location=device))
+    model.load_state_dict(torch.load(os.path.join(model_dir, args.checkpoint_name), map_location=device))
     model.eval()
 
-    reader = _get_reader(config)
+    reader = _get_reader(config, max_length=512)
 
-    batch_size = 32
     for path in os.listdir(args.data_dir):
         if not path.endswith('.conllu'):
             continue
@@ -58,8 +59,8 @@ def main():
             morpho_vectorizer.apply_to_instances(data)
 
         with open(os.path.join(result_data_dir, path), 'w') as f_out:
-            for begin_index in tqdm(range(0, len(data), batch_size)):
-                end_index = min(len(data), begin_index + batch_size)
+            for begin_index in tqdm(range(0, len(data), args.batch_size)):
+                end_index = min(len(data), begin_index + args.batch_size)
                 predictions_list = model.forward_on_instances(data[begin_index: end_index])
                 for predictions in predictions_list:
                     for token_index in range(len(predictions['words'])):
