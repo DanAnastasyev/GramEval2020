@@ -143,7 +143,8 @@ class CorpusIterator:
 
                 sentence.append(self._read_token(line))
             else:
-                raise StopIteration
+                if not sentence:
+                    raise StopIteration
 
             if sentence:
                 return Sentence(sentence)

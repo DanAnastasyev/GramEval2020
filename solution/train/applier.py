@@ -16,25 +16,35 @@ from train.morpho_vectorizer import MorphoVectorizer
 
 logger = logging.getLogger(__name__)
 
+BERT_MAX_LENGTH = 512
+
 
 def main():
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--model-name')
-    parser.add_argument('--data-dir', default='../data/test_data')
-    parser.add_argument('--predictions-dir', default='../predictions')
+    parser.add_argument('--pretrained-models-dir', default=None)
+    parser.add_argument('--models-dir', default='../models')
+    parser.add_argument('--data-dir', default='../data/test_private_data')
+    parser.add_argument('--predictions-dir', default='../predictions/private')
     parser.add_argument('--batch-size', default=128, type=int)
     parser.add_argument('--checkpoint-name', default='best.th')
     args = parser.parse_args()
 
-    model_dir = os.path.join('../models', args.model_name)
+    model_dir = os.path.join(args.models_dir, args.model_name)
     result_data_dir = os.path.join(args.predictions_dir, args.model_name)
 
     if not os.path.isdir(result_data_dir):
         os.makedirs(result_data_dir)
 
     config = Config.load(os.path.join(model_dir, 'config.json'))
+
+    if args.models_dir:
+        config.data.models_dir = args.models_dir
+    if args.pretrained_models_dir:
+        config.data.pretrained_models_dir = args.pretrained_models_dir
+
     logger.info('Config: %s', config)
 
     device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu:0')
@@ -43,11 +53,13 @@ def main():
     lemmatize_helper = LemmatizeHelper.load(model_dir)
     morpho_vectorizer = MorphoVectorizer() if config.embedder.use_pymorphy else None
 
-    model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer).to(device)
+    model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_length=BERT_MAX_LENGTH)
+    model.to(device)
+
     model.load_state_dict(torch.load(os.path.join(model_dir, args.checkpoint_name), map_location=device))
     model.eval()
 
-    reader = _get_reader(config, max_length=512)
+    reader = _get_reader(config, bert_max_length=BERT_MAX_LENGTH, reader_max_length=None)
 
     for path in os.listdir(args.data_dir):
         if not path.endswith('.conllu'):

@@ -274,7 +274,7 @@ class DependencyParser(Model):
 
         initializer(self)
 
-    # @overrides
+    @overrides
     def forward(self,  # type: ignore
                 words: Dict[str, torch.LongTensor],
                 metadata: List[Dict[str, Any]],
@@ -369,7 +369,7 @@ class DependencyParser(Model):
 
         return output_dict
 
-    # @overrides
+    @overrides
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
 
         head_tags = output_dict.pop("head_tags").cpu().detach().numpy()
@@ -818,7 +818,7 @@ class DependencyParser(Model):
             new_mask = new_mask * (1 - label_mask)
         return new_mask
 
-    # @overrides
+    @overrides
     def get_metrics(self, reset: bool = False) -> Dict[str, float]:
         metrics = self._attachment_scores.get_metric(reset)
         metrics['GramValAcc'] = self._gram_val_prediction_accuracy.get_metric(reset)

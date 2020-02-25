@@ -129,30 +129,32 @@ def build_config(config_dir, model, full_data, pretrained_models_dir=None, model
     return config
 
 
-def _get_reader(config, skip_labels=False, max_length=150, read_first=None):
+def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=150, read_first=None):
     indexer = None
     if config.embedder.name == 'elmo':
         indexer = ELMoTokenCharactersIndexer()
     elif config.embedder.name.endswith('bert'):
         bert_path = os.path.join(config.data.pretrained_models_dir, config.embedder.name)
         indexer = PretrainedTransformerMismatchedIndexer(
-            model_name=bert_path, tokenizer_kwargs={'do_lower_case': False}
+            model_name=bert_path, tokenizer_kwargs={'do_lower_case': False},
+            max_length=bert_max_length
         )
     elif config.embedder.name == 'both':
         elmo_indexer = ELMoTokenCharactersIndexer()
 
         bert_path = os.path.join(config.data.pretrained_models_dir, 'ru_bert')
         bert_indexer = PretrainedTransformerMismatchedIndexer(
-            model_name=bert_path, tokenizer_kwargs={'do_lower_case': False}
+            model_name=bert_path, tokenizer_kwargs={'do_lower_case': False},
+            max_length=bert_max_length
         )
 
         return UDDatasetReader({'elmo': elmo_indexer, 'ru_bert': bert_indexer}, skip_labels=skip_labels,
-                               max_length=max_length, read_first=read_first)
+                               max_length=reader_max_length, read_first=read_first)
     else:
         assert False, 'Unknown embedder {}'.format(config.embedder.name)
 
     return UDDatasetReader({config.embedder.name: indexer}, skip_labels=skip_labels,
-                           max_length=max_length, read_first=read_first)
+                           max_length=reader_max_length, read_first=read_first)
 
 
 def _load_train_data(config):
@@ -193,7 +195,7 @@ def _build_lemmatizer(train_data):
     return lemmatize_helper
 
 
-def _load_embedder(config):
+def _load_embedder(config, bert_max_length):
     if config.embedder.name == 'elmo':
         embedder = ElmoTokenEmbedder(
             options_file=os.path.join(config.data.pretrained_models_dir, 'elmo/options.json'),
@@ -203,7 +205,8 @@ def _load_embedder(config):
         embedder.eval()
     elif config.embedder.name.endswith('bert'):
         embedder = PretrainedTransformerMismatchedEmbedder(
-            model_name=os.path.join(config.data.pretrained_models_dir, config.embedder.name)
+            model_name=os.path.join(config.data.pretrained_models_dir, config.embedder.name),
+            max_length=bert_max_length
         )
     elif config.embedder.name == 'both':
         elmo_embedder = ElmoTokenEmbedder(
@@ -214,7 +217,8 @@ def _load_embedder(config):
         elmo_embedder.eval()
 
         bert_embedder = PretrainedTransformerMismatchedEmbedder(
-            model_name=os.path.join(config.data.pretrained_models_dir, 'ru_bert')
+            model_name=os.path.join(config.data.pretrained_models_dir, 'ru_bert'),
+            max_length=bert_max_length
         )
 
         return BasicTextFieldEmbedder({'elmo': elmo_embedder, 'ru_bert': bert_embedder})
@@ -224,8 +228,8 @@ def _load_embedder(config):
     return BasicTextFieldEmbedder({config.embedder.name: embedder})
 
 
-def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer):
-    embedder = _load_embedder(config)
+def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_length=None):
+    embedder = _load_embedder(config, bert_max_length)
 
     input_dim = embedder.get_output_dim()
     if config.embedder.use_pymorphy:
