@@ -23,13 +23,19 @@ def main():
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
 
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-name')
-    parser.add_argument('--pretrained-models-dir', default=None)
-    parser.add_argument('--models-dir', default='../models')
-    parser.add_argument('--data-dir', default='../data/test_private_data')
-    parser.add_argument('--predictions-dir', default='../predictions/private')
+    parser.add_argument('--model-name', help='Model\'s name (the name of directory with the trained model)')
+    parser.add_argument(
+        '--pretrained-models-dir', default=None, help='Path to directory with pretrained models (e.g., RuBERT)'
+    )
+    parser.add_argument('--models-dir', default='../models', help='Path to directory where the models are stored')
+    parser.add_argument(
+        '--data-dir', default='../data/test_private_data', help='Path to directory with files to apply the model to'
+    )
+    parser.add_argument(
+        '--predictions-dir', default='../predictions/private', help='Path to directory to store the predictions'
+    )
     parser.add_argument('--batch-size', default=128, type=int)
-    parser.add_argument('--checkpoint-name', default='best.th')
+    parser.add_argument('--checkpoint-name', default='best.th', help='Name of the checkpoint to use')
     args = parser.parse_args()
 
     model_dir = os.path.join(args.models_dir, args.model_name)

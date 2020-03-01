@@ -1,35 +1,35 @@
 {
-  "model_name": "ru_bert_parser_with_tagger_GSD",
+  "model_name": "ru_bert_parser_with_tagger",
   "embedder": {
     "name": "ru_bert",
     "dropout": 0.4,
-    "use_pymorphy": false
+    "use_pymorphy": true
   },
   "encoder": {
     "encoder_type": "lstm",
     "hidden_dim": 256,
     "num_layers": 1,
     "dropout": 0.3,
-    "variational_dropout": 0.3,
-    "use_weight_drop": true
+    "variational_dropout": 0,
+    "use_weight_drop": false
   },
   "parser": {
     "dropout": 0.1,
-    "tag_representation_dim": 128,
+    "tag_representation_dim": 256,
     "arc_representation_dim": 512,
-    "gram_val_representation_dim": -1,
-    "lemma_representation_dim": -1
+    "gram_val_representation_dim": 256,
+    "lemma_representation_dim": 256
   },
   "trainer": {
-    "batch_size": 32,
-    "num_epochs": 7,
+    "batch_size": 64,
+    "num_epochs": 25,
     "patience": 5,
-    "num_gradient_accumulation_steps": 1,
     "lr": 1e-3,
     "bert_lr": 1e-4,
     "cut_frac": 0.1,
     "gradual_unfreezing": true,
-    "discriminative_fine_tuning": true
+    "discriminative_fine_tuning": true,
+    "num_gradient_accumulation_steps": 1
   },
   "data": {
     "data_dir": "../data",
@@ -37,10 +37,23 @@
     "models_dir": "../models",
     "train_data_all_except": null,
     "train_data": [
-      "GramEval2020-GSD-train.conllu"
+      "GramEval2020-17cent-train.conllu",
+      "GramEval2020-GSD-train.conllu",
+      "GramEval2020-SynTagRus-train-v2.conllu",
+      "GramEval2020-Taiga-news-train.conllu",
+      "GramEval2020-Taiga-poetry-train.conllu",
+      "GramEval2020-Taiga-social-train.conllu",
+      "MorphoRuEval2017-JZ-gold.conllu",
+      "MorphoRuEval2017-Lenta-train.conllu",
+      "MorphoRuEval2017-VK-gold.conllu"
     ],
     "valid_data": [
-      "GramEval2020-GSD-wiki-dev.conllu"
+      "GramEval2020-17cent-dev.conllu",
+      "GramEval2020-GSD-wiki-dev.conllu",
+      "GramEval2020-RuEval2017-Lenta-news-dev.conllu",
+      "GramEval2020-RuEval2017-social-dev.conllu",
+      "GramEval2020-SynTagRus-dev.conllu",
+      "GramEval2020-Taiga-poetry-dev.conllu"
     ]
   }
 }

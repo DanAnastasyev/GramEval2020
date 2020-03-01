@@ -379,12 +379,18 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
 def main():
     logging.basicConfig(level=logging.INFO, format='[%(asctime)s] [%(name)s] [%(levelname)s] %(message)s')
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--config-dir', default='train/configs')
-    parser.add_argument('--model', default='bert')
-    parser.add_argument('--pretrained-models-dir', default=None)
-    parser.add_argument('--models-dir', default=None)
-    parser.add_argument('--full-data', default=False, action='store_true')
+    parser = argparse.ArgumentParser(add_help=True)
+    parser.add_argument('--config-dir', default='train/configs', help='Path to the directory with configs')
+    parser.add_argument('--model', default='bert', help='Name of the config to use')
+    parser.add_argument(
+        '--pretrained-models-dir', default=None, help='Path to directory with pretrained models (e.g., RuBERT)'
+    )
+    parser.add_argument('--models-dir', default=None, help='Path to directory to save the model')
+    parser.add_argument(
+        '--full-data', default=False, action='store_true',
+        help='Whether to train the model on the full train data'
+             ' (it\'s useful when you\'re too lazy to specify all files)'
+    )
     args = parser.parse_args()
 
     config = build_config(args.config_dir, args.model, args.full_data, args.pretrained_models_dir, args.models_dir)
