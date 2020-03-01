@@ -2,7 +2,18 @@
 
 A solution for [GramEval2020](https://github.com/dialogue-evaluation/GramEval2020) competition.
 
+## About the Model
+The model is based on [DeepPavlov's RuBERT](http://docs.deeppavlov.ai/en/master/features/models/bert.html) and AllenNLP dependencies parser implementation (which is based on [Deep Biaffine Attention for Neural Dependency Parsing (Dozat and Manning, 2016)](https://arxiv.org/abs/1611.01734)). 
+
+This is an end-to-end parser: the predictions for grammar values, lemmas and dependencies are made by a single model trained in a multi-task mode and they are not conditioned on each other.  
+It uses BERT embedder with a single layer LSTM encoder, simple feedforward predictors for grammar values and lemmas and biaffine attention predictors for dependencies and their labels.
+
+## Try it!
+Simply open it here: [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/10aQbeZqibllgfpZkqBlIddDY426c4sNq?authuser=1#forceEdit=true&sandboxMode=true)
+
 ## Preparations
+In order to reproduce it locally, you will need to follow these steps.
+
 Firstly, clone the repo:
 ```bash
 git clone https://github.com/DanAnastasyev/GramEval2020.git
@@ -21,7 +32,7 @@ pip install -r requirements.txt
 pip install git+git://github.com/DanAnastasyev/allennlp.git
 ```
 
-The later command will install a very specific version of the allennlp library with a simple patch (that allows to pass arguments to the tokenizer).
+The later command will install a very specific version of the AllenNLP library with a simple patch (that allows to pass arguments to the tokenizer).
 
 After that, download the data. You can simply run `./download_data.sh` on linux/mac. Otherwise, download the archive manually from Google Drive [here](https://drive.google.com/open?id=1bSZW3D7M1Gyv7W5Rl4ajiqDvyyK19iny).
 
@@ -33,7 +44,7 @@ To train a model, run the following command:
 cd solution
 python -m train.main
 ```
-It will use the BERT-based model config and train it on the data from `data/data_train` folder.
+It will use the [BERT-based model config](solution/train/configs/bert.json) and train it on the data from `data/data_train` folder.
 
 ## Apply
 To apply a trained model from the previous step on the test data, use `train.applier` script.
