@@ -65,7 +65,7 @@ def main():
     model.load_state_dict(torch.load(os.path.join(model_dir, args.checkpoint_name), map_location=device))
     model.eval()
 
-    reader = _get_reader(config, bert_max_length=BERT_MAX_LENGTH, reader_max_length=None)
+    reader = _get_reader(config, skip_labels=True, bert_max_length=BERT_MAX_LENGTH, reader_max_length=None)
 
     for path in os.listdir(args.data_dir):
         if not path.endswith('.conllu'):

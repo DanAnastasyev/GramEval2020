@@ -26,7 +26,7 @@ class LemmatizeRule(object):
 
 
 class LemmatizeHelper(object):
-    _DEFAULT_RULE_INDEX = 0
+    UNKNOWN_RULE_INDEX = 0
     _OUTPUT_FILE_NAME = 'lemmatizer_info.json'
 
     def __init__(self, lemmatize_rules=None):
@@ -40,12 +40,18 @@ class LemmatizeHelper(object):
             meta = instance.fields['metadata']
             words, lemmas = meta['words'], meta['lemmas']
             for word, lemma in zip(words, lemmas):
+                if lemma == '_' and word != '_':
+                    continue
+
                 rule = self.predict_lemmatize_rule(word, lemma)
                 rules_counter[rule] += 1
 
                 assert self.lemmatize(word, rule).replace('ё', 'е') == lemma.replace('ё', 'е')
 
-        self._lemmatize_rules = {LemmatizeRule(): self._DEFAULT_RULE_INDEX}
+        self._lemmatize_rules = {
+            LemmatizeRule(): self.UNKNOWN_RULE_INDEX,
+            LemmatizeRule(): self.UNKNOWN_RULE_INDEX + 1
+        }
         skipped_count, total_count = 0., 0
         for rule, count in rules_counter.most_common():
             total_count += count
@@ -67,8 +73,11 @@ class LemmatizeHelper(object):
         return [rule for rule, _ in sorted(self._lemmatize_rules.items(), key=lambda pair: pair[1])]
 
     def get_rule_index(self, word, lemma):
+        if lemma == '_' and word != '_':
+            return self.UNKNOWN_RULE_INDEX
+
         rule = self.predict_lemmatize_rule(word, lemma)
-        return self._lemmatize_rules.get(rule, self._DEFAULT_RULE_INDEX)
+        return self._lemmatize_rules.get(rule, self.UNKNOWN_RULE_INDEX)
 
     def get_rule_indices(self, instance):
         meta = instance.fields['metadata']

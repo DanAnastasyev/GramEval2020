@@ -496,7 +496,8 @@ class DependencyParser(Model):
         if lemma_indices is not None:
             lemma_nll = self._update_multiclass_prediction_metrics(
                 logits=lemma_logits, targets=lemma_indices,
-                mask=token_mask, accuracy_metric=self._lemma_prediction_accuracy
+                mask=token_mask, accuracy_metric=self._lemma_prediction_accuracy,
+                masked_index=self.lemmatize_helper.UNKNOWN_RULE_INDEX
             )
 
         output_dict = {
@@ -514,11 +515,13 @@ class DependencyParser(Model):
         return output_dict
 
     @staticmethod
-    def _update_multiclass_prediction_metrics(logits, targets, mask, accuracy_metric):
+    def _update_multiclass_prediction_metrics(logits, targets, mask, accuracy_metric, masked_index=None):
         accuracy_metric(logits, targets, mask)
 
         logits = logits.view(-1, logits.shape[-1])
         loss = F.cross_entropy(logits, targets.view(-1), reduction='none')
+        if masked_index is not None:
+            mask = mask * (targets != masked_index)
         loss_mask = mask.view(-1)
         return (loss * loss_mask).sum() / loss_mask.sum()
 
