@@ -30,7 +30,7 @@ from allennlp.training.trainer import Trainer
 
 from train.dataset_reader import UDDatasetReader
 from train.lemmatize_helper import LemmatizeHelper
-from train.model import DependencyParser, LstmWeightDropSeq2SeqEncoder
+from train.model import DependencyParser, LstmWeightDropSeq2SeqEncoder, TaskConfig
 from train.morpho_vectorizer import MorphoVectorizer
 
 logger = logging.getLogger(__name__)
@@ -99,6 +99,7 @@ class Config(object):
     parser = attr.ib(default=ParserConfig())
     trainer = attr.ib(default=TrainerConfig())
     data = attr.ib(default=DataConfig())
+    task = attr.ib(default=TaskConfig())
 
     @classmethod
     def load(cls, path):
@@ -110,6 +111,7 @@ class Config(object):
         parser = ParserConfig(**json_config['parser'])
         trainer = TrainerConfig(**json_config['trainer'])
         data = DataConfig(**json_config['data'])
+        task = TaskConfig(**json_config['task'])
 
         embedder_config = json_config['embedder']
         embedder_models = [EmbedderModelConfig(**model_config) for model_config in embedder_config['models']]
@@ -125,7 +127,8 @@ class Config(object):
             encoder=encoder,
             parser=parser,
             trainer=trainer,
-            data=data
+            data=data,
+            task=task
         )
 
 
@@ -248,6 +251,14 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
     if config.embedder.use_pymorphy:
         input_dim += morpho_vectorizer.morpho_vector_dim
 
+    pos_tag_embedding = None
+    if config.task.task_type == 'single' and config.task.params['use_pos_tag']:
+        pos_tag_embedding = Embedding(
+            num_embeddings=vocab.get_vocab_size('grammar_value_tags'),
+            embedding_dim=config.task.params['pos_embedding_dim']
+        )
+        input_dim += config.task.params['pos_embedding_dim']
+
     encoder = None
     if config.encoder.encoder_type != 'lstm':
         encoder = PassThroughEncoder(input_dim=input_dim)
@@ -267,6 +278,8 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         text_field_embedder=embedder,
         encoder=encoder,
         lemmatize_helper=lemmatize_helper,
+        task_config=config.task,
+        pos_tag_embedding=pos_tag_embedding,
         morpho_vector_dim=morpho_vectorizer.morpho_vector_dim if config.embedder.use_pymorphy else 0,
         tag_representation_dim=config.parser.tag_representation_dim,
         arc_representation_dim=config.parser.arc_representation_dim,

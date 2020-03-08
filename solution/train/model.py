@@ -1,4 +1,5 @@
 from typing import Dict, Optional, Tuple, Any, List
+import attr
 import logging
 import copy
 
@@ -26,6 +27,12 @@ from train.lemmatize_helper import LemmatizeHelper
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
 POS_TO_IGNORE = {'``', "''", ':', ',', '.', 'PU', 'PUNCT', 'SYM'}
+
+
+@attr.s
+class TaskConfig(object):
+    task_type = attr.ib(default='multitask', validator=attr.validators.in_(['single', 'multitask']))
+    params = attr.ib(factory=dict)
 
 
 class WeightDrop(torch.nn.Module):
@@ -182,6 +189,7 @@ class DependencyParser(Model):
                  tag_representation_dim: int,
                  arc_representation_dim: int,
                  lemmatize_helper: LemmatizeHelper,
+                 task_config: TaskConfig,
                  morpho_vector_dim: int = 0,
                  gram_val_representation_dim: int = -1,
                  lemma_representation_dim: int = -1,
@@ -198,6 +206,7 @@ class DependencyParser(Model):
         self.text_field_embedder = text_field_embedder
         self.encoder = encoder
         self.lemmatize_helper = lemmatize_helper
+        self.task_config = task_config
 
         encoder_dim = encoder.get_output_dim()
 
@@ -224,6 +233,8 @@ class DependencyParser(Model):
                                                       num_labels)
 
         self._pos_tag_embedding = pos_tag_embedding or None
+        assert self.task_config.params.get("use_pos_tag", False) == (self._pos_tag_embedding is not None)
+
         self._dropout = InputVariationalDropout(dropout)
         self._input_dropout = Dropout(input_dropout)
         self._head_sentinel = torch.nn.Parameter(torch.randn([1, 1, encoder.get_output_dim()]))
@@ -340,7 +351,7 @@ class DependencyParser(Model):
             embedded_text_input = torch.cat([embedded_text_input, morpho_embedding], -1)
 
         if pos_tags is not None and self._pos_tag_embedding is not None:
-            embedded_pos_tags = self._pos_tag_embedding(pos_tags)
+            embedded_pos_tags = self._pos_tag_embedding(grammar_values)
             embedded_text_input = torch.cat([embedded_text_input, embedded_pos_tags], -1)
         elif self._pos_tag_embedding is not None:
             raise ConfigurationError("Model uses a POS embedding, but no POS tags were passed.")
@@ -349,7 +360,20 @@ class DependencyParser(Model):
 
         output_dict = self._parse(embedded_text_input, mask, head_tags, head_indices, grammar_values, lemma_indices)
 
-        losses = ["arc_nll", "tag_nll", "grammar_nll", "lemma_nll"]
+        if self.task_config.task_type == "multitask":
+            losses = ["arc_nll", "tag_nll", "grammar_nll", "lemma_nll"]
+        elif self.task_config.task_type == "single":
+            if self.task_config.params["model"] == "morphology":
+                losses = ["grammar_nll"]
+            elif self.task_config.params["model"] == "lemmatization":
+                losses = ["lemma_nll"]
+            elif self.task_config.params["model"] == "syntax":
+                losses = ["arc_nll", "tag_nll"]
+            else:
+                assert False, "Unknown model type {}".format(self.task_config.params["model"])
+        else:
+            assert False, "Unknown task type {}".format(self.task_config.task_type)
+
         output_dict["loss"] = sum(output_dict[loss_name] for loss_name in losses)
 
         if head_indices is not None and head_tags is not None:
@@ -371,7 +395,6 @@ class DependencyParser(Model):
 
     @overrides
     def decode(self, output_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
-
         head_tags = output_dict.pop("head_tags").cpu().detach().numpy()
         heads = output_dict.pop("heads").cpu().detach().numpy()
         predicted_gram_vals = output_dict.pop("gram_vals").cpu().detach().numpy()
@@ -406,10 +429,23 @@ class DependencyParser(Model):
                 for word, lemmatize_rule_index in zip(words, lemmas)
             ])
 
-        output_dict["predicted_dependencies"] = head_tag_labels
-        output_dict["predicted_heads"] = head_indices
-        output_dict["predicted_gram_vals"] = decoded_gram_vals
-        output_dict["predicted_lemmas"] = decoded_lemmas
+        if self.task_config.task_type == "multitask":
+            output_dict["predicted_dependencies"] = head_tag_labels
+            output_dict["predicted_heads"] = head_indices
+            output_dict["predicted_gram_vals"] = decoded_gram_vals
+            output_dict["predicted_lemmas"] = decoded_lemmas
+        elif self.task_config.task_type == "single":
+            if self.task_config.params["model"] == "morphology":
+                output_dict["predicted_gram_vals"] = decoded_gram_vals
+            elif self.task_config.params["model"] == "lemmatization":
+                output_dict["predicted_lemmas"] = decoded_lemmas
+            elif self.task_config.params["model"] == "syntax":
+                output_dict["predicted_dependencies"] = head_tag_labels
+                output_dict["predicted_heads"] = head_indices
+            else:
+                assert False, "Unknown model type {}".format(self.task_config.params["model"])
+        else:
+            assert False, "Unknown task type {}".format(self.task_config.task_type)
 
         return output_dict
 
