@@ -341,15 +341,27 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
     scheduler = None
 
     is_bert_based = any(model.name.endswith('bert') for model in config.embedder.models)
+    is_trainable_elmo_based = any(
+        model.name == 'elmo' and model.params['requires_grad']
+        for model in config.embedder.models
+    )
 
-    if is_bert_based:
-        non_bert_params = (
-            param for name, param in model.named_parameters() if not name.startswith('text_field_embedder')
-        )
+    if is_bert_based or is_trainable_elmo_based:
+        def _is_pretrained_param(name):
+            return 'transformer_model' in name or '_elmo_lstm' in name
+
+        pretrained_params, non_pretrained_params = [], []
+        for name, param in model.named_parameters():
+            if _is_pretrained_param(name):
+                logger.info('Pretrained param: %s', name)
+                pretrained_params.append(param)
+            else:
+                logger.info('Non-pretrained param: %s', name)
+                non_pretrained_params.append(param)
 
         optimizer = optim.AdamW([
-            {'params': model.text_field_embedder.parameters(), 'lr': config.trainer.bert_lr},
-            {'params': non_bert_params, 'lr': config.trainer.lr},
+            {'params': pretrained_params, 'lr': config.trainer.bert_lr},
+            {'params': non_pretrained_params, 'lr': config.trainer.lr},
             {'params': []}
         ])
 

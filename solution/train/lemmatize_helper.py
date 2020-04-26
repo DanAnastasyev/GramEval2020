@@ -27,6 +27,7 @@ class LemmatizeRule(object):
 
 class LemmatizeHelper(object):
     UNKNOWN_RULE_INDEX = 0
+    _UNKNOWN_RULE_PLACEHOLDER = LemmatizeRule(cut_prefix=100, cut_suffix=100, append_suffix='-' * 90)
     _OUTPUT_FILE_NAME = 'lemmatizer_info.json'
 
     def __init__(self, lemmatize_rules=None):
@@ -49,7 +50,7 @@ class LemmatizeHelper(object):
                 assert self.lemmatize(word, rule).replace('ё', 'е') == lemma.replace('ё', 'е')
 
         self._lemmatize_rules = {
-            LemmatizeRule(): self.UNKNOWN_RULE_INDEX,
+            self._UNKNOWN_RULE_PLACEHOLDER: self.UNKNOWN_RULE_INDEX,
             LemmatizeRule(): self.UNKNOWN_RULE_INDEX + 1
         }
         skipped_count, total_count = 0., 0

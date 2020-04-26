@@ -350,7 +350,7 @@ class DependencyParser(Model):
         if morpho_embedding is not None:
             embedded_text_input = torch.cat([embedded_text_input, morpho_embedding], -1)
 
-        if pos_tags is not None and self._pos_tag_embedding is not None:
+        if grammar_values is not None and self._pos_tag_embedding is not None:
             embedded_pos_tags = self._pos_tag_embedding(grammar_values)
             embedded_text_input = torch.cat([embedded_text_input, embedded_pos_tags], -1)
         elif self._pos_tag_embedding is not None:
