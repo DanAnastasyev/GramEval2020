@@ -10,6 +10,24 @@ then
     mkdir models
 fi
 
-download_from_google_drive "1XiCj0OXZtBfxKyhMEPodt6wp2Jpc3RI9" "model.tar" \
-    && tar -xvf model.tar -C models \
+declare -A IDS=(
+    ["ru_bert_final_model"]="1RpWcC8PGkSO7eduW5DBCS4ygHKjpEC4P"
+    ["chars"]="1XbN1hz0xNZ2GNnSnXh5ewHo2TGJZjJwg"
+    ["chars_lstm"]="1UUR3tlLwceEtK8bGzMgeSMndJKm_M368"
+    ["chars_morph_lstm"]="1XHYoVIZSMiq4llRyO5ONd1ZzYfVQxu6Y"
+    ["frozen_elmo"]="12leckypYyO6-88eqx2x0-tFAGN2OxarR"
+    ["frozen_elmo_lstm"]="1ocIT5ObAsxKi-dnVkJrzX0D9z04PAdex"
+    ["frozen_elmo_morph_lstm"]="16hoeT3izwX1im2vnf3BgRRicPNsdBG_B"
+    ["trainable_elmo"]="1RFcme4sVHnVbwiPOOp4BtP4_MbZn2ijC"
+    ["trainable_elmo_lstm"]="1lAZezljNEhq-N8R-C2k3TojwoRCtpidc"
+    ["frozen_bert"]="1lAZezljNEhq-N8R-C2k3TojwoRCtpidc"
+    ["frozen_bert_lstm"]="1OejzGzV_JuNdEAVneahxaLUWJUIUpjre"
+    ["trainable_bert"]="1RdcK5ECIjxOZWxZnbH9g1_XbhJNP6K2N"
+    ["trainable_bert_lstm"]="1Khvtoo2cYROH0e-wrD97bn5gWx4NE_ru"
+    ["trainable_bert_morph_lstm"]="1dmmk5LjecmDRvrpyAnEIZASnDwbAi_Hu"
+)
+
+download_from_google_drive ${IDS[$1]} "model.tar" \
+    && mkdir models/$1 \
+    && tar -xvf model.tar -C models/$1 \
     && rm model.tar
