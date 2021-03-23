@@ -5,18 +5,42 @@ import json
 import logging
 import os
 import torch
+import pymorphy2
 
 from tqdm import tqdm
+
+from pymorphy2.units.by_analogy import KnownSuffixAnalyzer
 
 from allennlp.data.vocabulary import Vocabulary
 
 from train.main import Config, _build_model, _get_reader
 from train.lemmatize_helper import LemmatizeHelper
 from train.morpho_vectorizer import MorphoVectorizer
+from train.lemma_vectorizer import apply_to_instances as apply_lemma_vectorizer_to_instances
 
 logger = logging.getLogger(__name__)
 
 BERT_MAX_LENGTH = 512
+
+_MORPH = pymorphy2.MorphAnalyzer()
+
+
+def _is_unknown(parse):
+    return any(isinstance(unit[0], KnownSuffixAnalyzer.FakeDictionary) for unit in parse.methods_stack)
+
+
+def choose_lemma(word, lemma, pymorphy_lemma):
+    is_unknown_lemma = all(_is_unknown(parse) for parse in _MORPH.parse(lemma))
+    is_unknown_pymorphy_lemma = all(_is_unknown(parse) for parse in _MORPH.parse(pymorphy_lemma))
+    is_unknown_word = all(_is_unknown(parse) for parse in _MORPH.parse(word))
+
+    if lemma == 'осуществляять':
+        print(word, lemma, pymorphy_lemma, is_unknown_word, is_unknown_lemma, is_unknown_pymorphy_lemma)
+
+    if not is_unknown_word and not is_unknown_pymorphy_lemma and is_unknown_lemma:
+        return pymorphy_lemma
+
+    return lemma
 
 
 def main():
@@ -64,6 +88,7 @@ def main():
 
     model.load_state_dict(torch.load(os.path.join(model_dir, args.checkpoint_name), map_location=device))
     model.eval()
+    logger.info('Model: %s', model)
 
     reader = _get_reader(config, skip_labels=True, bert_max_length=BERT_MAX_LENGTH, reader_max_length=None)
 
@@ -76,6 +101,9 @@ def main():
         if morpho_vectorizer is not None:
             morpho_vectorizer.apply_to_instances(data)
 
+        if config.embedder.use_lemmas:
+            apply_lemma_vectorizer_to_instances(lemmatize_helper, data)
+
         with open(os.path.join(result_data_dir, path), 'w') as f_out:
             for begin_index in tqdm(range(0, len(data), args.batch_size)):
                 end_index = min(len(data), begin_index + args.batch_size)
@@ -84,12 +112,11 @@ def main():
                     for token_index in range(len(predictions['words'])):
                         word = predictions['words'][token_index]
                         lemma = predictions['predicted_lemmas'][token_index]
-                        upos, feats = predictions['predicted_gram_vals'][token_index].split('|', 1)
-                        head_tag = predictions['predicted_dependencies'][token_index]
-                        head_index = predictions['predicted_heads'][token_index]
+                        pymorphy_lemma = predictions['predicted_pymorphy_lemmas'][token_index]
 
-                        print(token_index + 1, word, lemma, upos, '_', feats,
-                              head_index, head_tag, '_', '_', sep='\t', file=f_out)
+                        lemma = choose_lemma(word, lemma, pymorphy_lemma)
+
+                        print(token_index + 1, word, lemma, sep='\t', file=f_out)
                     print(file=f_out)
 
 

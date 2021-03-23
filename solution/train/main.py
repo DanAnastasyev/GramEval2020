@@ -29,6 +29,7 @@ from allennlp.training.learning_rate_schedulers.slanted_triangular import Slante
 from allennlp.training.trainer import Trainer
 
 from train.dataset_reader import UDDatasetReader
+from train.lemma_vectorizer import apply_to_instances as apply_lemma_vectorizer_to_instances
 from train.lemmatize_helper import LemmatizeHelper
 from train.model import DependencyParser, LstmWeightDropSeq2SeqEncoder, TaskConfig
 from train.morpho_vectorizer import MorphoVectorizer
@@ -47,6 +48,7 @@ class EmbedderConfig(object):
     models = attr.ib(default=[EmbedderModelConfig()])
     dropout = attr.ib(default=0.4)
     use_pymorphy = attr.ib(default=False)
+    use_lemmas = attr.ib(default=False)
 
 
 @attr.s
@@ -118,7 +120,8 @@ class Config(object):
         embedder = EmbedderConfig(
             models=embedder_models,
             dropout=embedder_config['dropout'],
-            use_pymorphy=embedder_config['use_pymorphy']
+            use_pymorphy=embedder_config['use_pymorphy'],
+            use_lemmas=embedder_config.get('use_lemmas', False),
         )
 
         return cls(
@@ -149,7 +152,7 @@ def build_config(config_dir, model, full_data, pretrained_models_dir=None, model
     return config
 
 
-def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=150, read_first=None):
+def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=200, read_first=None):
     indexers = {}
     for embedder_config in config.embedder.models:
         if embedder_config.name == 'elmo':
@@ -250,6 +253,8 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
     input_dim = embedder.get_output_dim()
     if config.embedder.use_pymorphy:
         input_dim += morpho_vectorizer.morpho_vector_dim
+    if config.embedder.use_lemmas:
+        input_dim += len(lemmatize_helper)
 
     pos_tag_embedding = None
     if config.task.task_type == 'single' and config.task.params['use_pos_tag']:
@@ -269,7 +274,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         )
     else:
         encoder = PytorchSeq2SeqWrapper(torch.nn.LSTM(
-            input_dim, config.encoder.hidden_dim, num_layers=config.encoder.num_layers,
+            input_dim + 8, config.encoder.hidden_dim, num_layers=config.encoder.num_layers,
             dropout=config.encoder.dropout, bidirectional=True, batch_first=True
         ))
 
@@ -281,6 +286,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         task_config=config.task,
         pos_tag_embedding=pos_tag_embedding,
         morpho_vector_dim=morpho_vectorizer.morpho_vector_dim if config.embedder.use_pymorphy else 0,
+        lemma_vector_dim=len(lemmatize_helper) if config.embedder.use_lemmas else 0,
         tag_representation_dim=config.parser.tag_representation_dim,
         arc_representation_dim=config.parser.arc_representation_dim,
         dropout=config.parser.dropout,
@@ -431,6 +437,7 @@ def main():
         help='Whether to train the model on the full train data'
              ' (it\'s useful when you\'re too lazy to specify all files)'
     )
+    parser.add_argument('--finetune-from', default=None)
     args = parser.parse_args()
 
     config = build_config(args.config_dir, args.model, args.full_data, args.pretrained_models_dir, args.models_dir)
@@ -454,12 +461,38 @@ def main():
         morpho_vectorizer = MorphoVectorizer()
         morpho_vectorizer.apply_to_instances(chain(train_data, valid_data))
 
-    vocab = Vocabulary.from_instances(chain(train_data, valid_data))
+    if config.embedder.use_lemmas:
+        apply_lemma_vectorizer_to_instances(lemmatize_helper, train_data)
+        apply_lemma_vectorizer_to_instances(lemmatize_helper, valid_data)
+
+    print(train_data[0].fields['lemma_embedding'].array)
+
+    vocab = Vocabulary.from_files('../models/span_normalization/vocab')
+    model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
+
+    if args.finetune_from:
+        logger.info('Loading model from %s', args.finetune_from)
+        skip_weights = {
+            '_head_sentinel',
+            'head_arc_feedforward._linear_layers.0.weight',
+            'child_arc_feedforward._linear_layers.0.weight',
+            'head_tag_feedforward._linear_layers.0.weight',
+            'child_tag_feedforward._linear_layers.0.weight',
+            '_gram_val_output.weight',
+            '_lemma_output.weight',
+            '_lemma_output.bias',
+        }
+        state_dict = torch.load(os.path.join(args.finetune_from, 'best.th'), map_location='cpu')
+        state_dict = {key: val for key, val in state_dict.items() if key not in skip_weights}
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        logger.info('Missing keys:')
+        logger.info('\n'.join('\t' + key for key in missing_keys))
+        logger.info('\n'.join('\t' + key for key in unexpected_keys))
+
+    logger.info('Model:\n%s', model)
     logger.info('Vocab = %s', vocab)
     vocab.print_statistics()
-
-    model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
-    logger.info('Model:\n%s', model)
 
     vocab.save_to_files(os.path.join(model_dir, 'vocab'))
     lemmatize_helper.save(model_dir)

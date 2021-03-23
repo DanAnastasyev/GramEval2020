@@ -13,6 +13,7 @@ class Token:
     grammar_value: str = attr.ib()
     head: int = attr.ib()
     head_tag: str = attr.ib()
+    additional_label: str = attr.ib()
 
 
 class Sentence(object):
@@ -53,6 +54,12 @@ class Sentence(object):
             return None
         return [token.head_tag for token in self._tokens]
 
+    @property
+    def additional_labels(self):
+        if not self._tokens or self._tokens[0].additional_label is None:
+            return None
+        return [token.additional_label for token in self._tokens]
+
     def __len__(self):
         return len(self._tokens)
 
@@ -60,8 +67,8 @@ class Sentence(object):
 class CorpusIterator:
     def __init__(self, path: str, separator: str='\t', token_col_index: int=1, lemma_col_index: int=2,
                  grammar_val_col_indices: Tuple=(3, 5), grammemes_separator: str='|',
-                 head_col_index: int=6, head_tag_col_index: int=7,
-                 skip_line_prefix: str='#', encoding: str='utf8'):
+                 head_col_index: int=6, head_tag_col_index: int=7, additional_label_index: int=None,
+                 column_count: int=None, skip_line_prefix: str='#', encoding: str='utf8'):
         """
         Creates iterator over the corpus in conll-like format:
         - each line contains token and its annotations (lemma and grammar value info) separated by ``separator``
@@ -86,6 +93,8 @@ class CorpusIterator:
         self._head_col_index = head_col_index
         self._head_tag_col_index = head_tag_col_index
         self._skip_line_prefix = skip_line_prefix
+        self._additional_label_index = additional_label_index
+        self._column_count = column_count
         self._encoding = encoding
 
     def __enter__(self):
@@ -99,7 +108,10 @@ class CorpusIterator:
         return self
 
     def _read_token(self, line):
-        fields = line.split(self._separator)
+        if self._column_count is not None:
+            fields = line.split(self._separator, self._column_count)
+        else:
+            fields = line.split(self._separator)
 
         token_text = fields[self._token_col_index]
         lemma, pos_tag, grammar_value, head, head_tag = None, None, None, None, None
@@ -122,20 +134,25 @@ class CorpusIterator:
         if self._head_tag_col_index is not None and self._head_tag_col_index < len(fields):
             head_tag = fields[self._head_tag_col_index]
 
+        if self._additional_label_index is not None and self._additional_label_index < len(fields):
+            additional_label = fields[self._additional_label_index]
+            assert additional_label in ('O', 'B', 'I'), fields
+
         return Token(
             text=token_text,
             lemma=lemma,
             pos_tag=pos_tag,
             grammar_value=grammar_value,
             head=head,
-            head_tag=head_tag
+            head_tag=head_tag,
+            additional_label=additional_label,
         )
 
     def __next__(self) -> Sentence:
         while True:
             sentence = []
             for line in self._file:
-                line = line.rstrip()
+                line = line[:-1]
                 if line.startswith(self._skip_line_prefix):
                     continue
                 if len(line) == 0:
