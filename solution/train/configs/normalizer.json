@@ -1,0 +1,61 @@
+{
+  "model_name": "model_trainable_parser_lemmas",
+  "embedder": {
+    "models": [
+      {
+        "name": "ru_bert",
+        "params": {
+          "requires_grad": true
+        }
+      }
+    ],
+    "dropout": 0.4,
+    "use_pymorphy": false,
+    "use_lemmas": true
+  },
+  "encoder": {
+    "encoder_type": "lstm",
+    "hidden_dim": 256,
+    "num_layers": 1,
+    "dropout": 0.3,
+    "variational_dropout": 0,
+    "use_weight_drop": false
+  },
+  "parser": {
+    "dropout": 0.1,
+    "tag_representation_dim": 256,
+    "arc_representation_dim": 512,
+    "gram_val_representation_dim": -1,
+    "lemma_representation_dim": -1
+  },
+  "trainer": {
+    "batch_size": 64,
+    "num_epochs": 25,
+    "patience": 5,
+    "lr": 0.001,
+    "bert_lr": 0.0001,
+    "cut_frac": 0.1,
+    "gradual_unfreezing": true,
+    "discriminative_fine_tuning": true,
+    "num_gradient_accumulation_steps": 1
+  },
+  "data": {
+    "data_dir": "../data/span_normalization",
+    "pretrained_models_dir": "../pretrained_models/",
+    "models_dir": "../models/span_normalization",
+    "train_data_all_except": null,
+    "train_data": [
+      "train.conllu"
+    ],
+    "valid_data": [
+      "valid.conllu"
+    ]
+  },
+  "task": {
+    "task_type": "single",
+    "params": {
+      "model": "lemmatization",
+      "use_pos_tag": false
+    }
+  }
+}
