@@ -44,7 +44,7 @@ def read_predictions(input_path, prediction_path):
             if not line1:
                 continue
 
-            index1, word1, lemma_id, _, suffix = line1.split('\t', 4)
+            index1, word1, lemma_id, _, _, suffix = line1.split('\t', 5)
             assert suffix.strip() == ''
             suffix = ' ' if suffix else ''
 

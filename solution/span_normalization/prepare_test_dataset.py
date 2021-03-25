@@ -61,8 +61,8 @@ def process_file(data_type, file_id):
 
 def collect_dataset(data_split):
     dataset = []
-    for data_type in ['generic', 'named']:
-        data_type = f'{data_split}/{data_type}'
+    for data_tag in ['generic', 'named']:
+        data_type = f'{data_split}/{data_tag}'
         if data_split == 'valid':
             data_type += '/texts_and_ann'
         file_ids = [
@@ -73,6 +73,7 @@ def collect_dataset(data_split):
 
         for file_id in tqdm(file_ids):
             for row in process_file(data_type, file_id):
+                row = row + ([data_tag] * len(row[0]),)
                 dataset.append(row)
 
     return dataset
@@ -80,10 +81,10 @@ def collect_dataset(data_split):
 
 def write_dataset(dataset, data_split):
     with open(f'../data/span_normalization/{data_split}/{data_split}.conllu', 'w') as f:
-        for tokens, labels, spaces, indices in dataset:
-            assert len(tokens) == len(indices) == len(labels)
-            for i, (token, label, space, index) in enumerate(zip(tokens, labels, spaces, indices)):
-                print(f'{i + 1}\t{token}\t{index}\t{label}\t{space}', file=f)
+        for row in dataset:
+            assert all(len(element) == len(row[0]) for element in row)
+            for i, (token, label, space, index, data_tag) in enumerate(zip(*row)):
+                print(f'{i + 1}\t{token}\t{index}\t{label}\t{data_tag}\t{space}', file=f)
             print(file=f)
 
 

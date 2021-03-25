@@ -29,7 +29,7 @@ class UDDatasetReader(DatasetReader):
 
     @overrides
     def _read(self, file_path: str):
-        with CorpusIterator(file_path, additional_label_index=3, grammar_val_col_indices=None,
+        with CorpusIterator(file_path, span_tag_index=3, dataset_tag_index=4, grammar_val_col_indices=None,
                             head_col_index=None, head_tag_col_index=None) as corpus:
             for sent_index, sentence in enumerate(corpus):
                 if self._max_length is not None and len(sentence) > self._max_length:
@@ -71,10 +71,11 @@ class UDDatasetReader(DatasetReader):
         if sentence.head_tags and not self._skip_labels:
             fields['head_tags'] = SequenceLabelField(sentence.head_tags, text_field, 'head_tags')
 
-        if sentence.additional_labels:
-            fields['additional_labels'] = SequenceLabelField(
-                sentence.additional_labels, text_field, 'additional_labels'
-            )
+        if sentence.span_tags:
+            fields['span_tags'] = SequenceLabelField(sentence.span_tags, text_field, 'span_tags')
+
+        if sentence.dataset_tags:
+            fields['dataset_tags'] = SequenceLabelField(sentence.dataset_tags, text_field, 'dataset_tags')
 
         fields["metadata"] = MetadataField(metadata)
 

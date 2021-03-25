@@ -189,13 +189,14 @@ def process_file(data_type, file_id):
 
 def collect_dataset(data_split):
     dataset = []
-    for data_type in ['generic', 'named']:
-        data_type = f'{data_split}/{data_type}'
+    for data_tag in ['generic', 'named']:
+        data_type = f'{data_split}/{data_tag}'
         file_ids = [path.replace('.norm', '') for path in os.listdir(f'../data/span_normalization/raw/{data_type}/norm')]
 
         for file_id in tqdm(file_ids):
             for tokens, lemmas, spaces, labels in process_file(data_type, file_id):
-                dataset.append((tokens, lemmas, spaces, labels))
+                data_tags = [data_tag] * len(labels)
+                dataset.append((tokens, lemmas, spaces, labels, data_tags))
 
     return dataset
 
@@ -203,10 +204,10 @@ def collect_dataset(data_split):
 def write_dataset(dataset, data_split):
     path = 'data_train/train.conllu' if data_split == 'train' else 'data_open_test/valid.conllu'
     with open(f'../data/span_normalization/{path}', 'w') as f:
-        for tokens, lemmas, spaces, labels in dataset:
-            assert len(tokens) == len(lemmas) == len(labels)
-            for i, (token, lemma, space, label) in enumerate(zip(tokens, lemmas, spaces, labels)):
-                print(f'{i + 1}\t{token}\t{lemma}\t{label}\t{space}', file=f)
+        for row in dataset:
+            assert all(len(element) == len(row[0]) for element in row)
+            for i, (token, lemma, space, label, data_tag) in enumerate(zip(*row)):
+                print(f'{i + 1}\t{token}\t{lemma}\t{label}\t{data_tag}\t{space}', file=f)
             print(file=f)
 
 

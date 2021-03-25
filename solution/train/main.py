@@ -81,6 +81,7 @@ class TrainerConfig(object):
     gradual_unfreezing = attr.ib(default=True)
     discriminative_fine_tuning = attr.ib(default=True)
     num_gradient_accumulation_steps = attr.ib(default=1)
+    loss_dropper_config = attr.ib(default=None)
 
 
 @attr.s
@@ -274,7 +275,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         )
     else:
         encoder = PytorchSeq2SeqWrapper(torch.nn.LSTM(
-            input_dim + 8, config.encoder.hidden_dim, num_layers=config.encoder.num_layers,
+            input_dim + 16, config.encoder.hidden_dim, num_layers=config.encoder.num_layers,
             dropout=config.encoder.dropout, bidirectional=True, batch_first=True
         ))
 
@@ -292,7 +293,8 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         dropout=config.parser.dropout,
         input_dropout=config.embedder.dropout,
         gram_val_representation_dim=config.parser.gram_val_representation_dim,
-        lemma_representation_dim=config.parser.lemma_representation_dim
+        lemma_representation_dim=config.parser.lemma_representation_dim,
+        loss_dropper_config=config.trainer.loss_dropper_config,
     )
 
 
@@ -465,8 +467,6 @@ def main():
         apply_lemma_vectorizer_to_instances(lemmatize_helper, train_data)
         apply_lemma_vectorizer_to_instances(lemmatize_helper, valid_data)
 
-    print(train_data[0].fields['lemma_embedding'].array)
-
     vocab = Vocabulary.from_files('../models/span_normalization/vocab')
     model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
 
@@ -489,10 +489,6 @@ def main():
         logger.info('Missing keys:')
         logger.info('\n'.join('\t' + key for key in missing_keys))
         logger.info('\n'.join('\t' + key for key in unexpected_keys))
-
-    logger.info('Model:\n%s', model)
-    logger.info('Vocab = %s', vocab)
-    vocab.print_statistics()
 
     vocab.save_to_files(os.path.join(model_dir, 'vocab'))
     lemmatize_helper.save(model_dir)

@@ -23,6 +23,7 @@ from allennlp.nn.chu_liu_edmonds import decode_mst
 from allennlp.training.metrics import AttachmentScores, CategoricalAccuracy
 
 from train.lemmatize_helper import LemmatizeHelper
+from train.loss_dropper import LossDropper
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -200,6 +201,7 @@ class DependencyParser(Model):
                  use_mst_decoding_for_validation: bool = True,
                  dropout: float = 0.0,
                  input_dropout: float = 0.0,
+                 loss_dropper_config: None,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(DependencyParser, self).__init__(vocab, regularizer)
@@ -241,6 +243,7 @@ class DependencyParser(Model):
         self._head_sentinel = torch.nn.Parameter(torch.randn([1, 1, encoder.get_output_dim()]))
 
         self._span_label_embedding = torch.nn.Embedding(3, 8)
+        self._dataset_label_embedding = torch.nn.Embedding(2, 8)
 
         if gram_val_representation_dim <= 0:
             self._gram_val_output = torch.nn.Linear(encoder_dim, self.vocab.get_vocab_size("grammar_value_tags"))
@@ -262,18 +265,6 @@ class DependencyParser(Model):
                 torch.nn.Linear(lemma_representation_dim, len(lemmatize_helper))
             )
 
-        representation_dim = text_field_embedder.get_output_dim() + morpho_vector_dim + lemma_vector_dim
-        if pos_tag_embedding is not None:
-            representation_dim += pos_tag_embedding.get_output_dim()
-
-        # check_dimensions_match(representation_dim, encoder.get_input_dim(),
-        #                        "text field embedding dim", "encoder input dim")
-
-        # check_dimensions_match(tag_representation_dim, self.head_tag_feedforward.get_output_dim(),
-        #                        "tag representation dim", "tag feedforward output dim")
-        # check_dimensions_match(arc_representation_dim, self.head_arc_feedforward.get_output_dim(),
-        #                        "arc representation dim", "arc feedforward output dim")
-
         self.use_mst_decoding_for_validation = use_mst_decoding_for_validation
 
         tags = self.vocab.get_token_to_index_vocabulary("pos")
@@ -285,6 +276,10 @@ class DependencyParser(Model):
         self._attachment_scores = AttachmentScores()
         self._gram_val_prediction_accuracy = CategoricalAccuracy()
         self._lemma_prediction_accuracy = CategoricalAccuracy()
+
+        self._loss_dropper = None
+        if loss_dropper_config is not None:
+            self._loss_dropper = LossDropper(**loss_dropper_config)
 
         initializer(self)
 
@@ -299,7 +294,8 @@ class DependencyParser(Model):
                 head_indices: torch.LongTensor = None,
                 grammar_values: torch.LongTensor = None,
                 lemma_indices: torch.LongTensor = None,
-                additional_labels: torch.LongTensor = None) -> Dict[str, torch.Tensor]:
+                span_tags: torch.LongTensor = None,
+                dataset_tags: torch.LongTensor = None,) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
         """
         Parameters
@@ -364,9 +360,13 @@ class DependencyParser(Model):
         elif self._pos_tag_embedding is not None:
             raise ConfigurationError("Model uses a POS embedding, but no POS tags were passed.")
 
-        if additional_labels is not None:
-            span_labels = self._span_label_embedding(additional_labels)
-            embedded_text_input = torch.cat([embedded_text_input, span_labels], -1)
+        if span_tags is not None:
+            span_tag_embeddings = self._span_label_embedding(span_tags)
+            embedded_text_input = torch.cat([embedded_text_input, span_tag_embeddings], -1)
+
+        if dataset_tags is not None:
+            dataset_tag_embeddings = self._dataset_label_embedding(dataset_tags)
+            embedded_text_input = torch.cat([embedded_text_input, dataset_tag_embeddings], -1)
 
         mask = get_text_field_mask(words)
 
@@ -492,9 +492,10 @@ class DependencyParser(Model):
         predicted_lemmas = lemma_logits.argmax(-1)
 
         lemma_embedding[:, :, 0] = 0.
-        lemma_logits = lemma_logits * lemma_embedding
-        pymorphy_predicted_lemmas = lemma_logits.argmax(-1)
-        pymorphy_predicted_lemmas = torch.where(pymorphy_predicted_lemmas == 0, predicted_lemmas, pymorphy_predicted_lemmas)
+        pymorphy_predicted_lemmas = (lemma_logits * lemma_embedding).argmax(-1)
+        pymorphy_predicted_lemmas = torch.where(
+            pymorphy_predicted_lemmas == 0, predicted_lemmas, pymorphy_predicted_lemmas
+        )
 
         batch_size, _, encoding_dim = encoded_text.size()
 
@@ -581,8 +582,7 @@ class DependencyParser(Model):
 
         return output_dict
 
-    @staticmethod
-    def _update_multiclass_prediction_metrics(logits, targets, mask, accuracy_metric, masked_index=None):
+    def _update_multiclass_prediction_metrics(self, logits, targets, mask, accuracy_metric, masked_index=None):
         if masked_index is not None:
             mask = mask * (targets != masked_index)
 
@@ -591,7 +591,16 @@ class DependencyParser(Model):
         logits = logits.view(-1, logits.shape[-1])
         loss = F.cross_entropy(logits, targets.view(-1), reduction='none')
         loss_mask = mask.view(-1)
-        return (loss * loss_mask).sum() / loss_mask.sum()
+        if not self._loss_dropper:
+            return (loss * loss_mask).sum() / loss_mask.sum()
+
+        loss = loss * loss_mask
+
+        loss = loss.view(-1)
+        loss_drop_mask = self._loss_dropper(loss)
+        loss = loss * loss_drop_mask
+
+        return loss.sum() / (loss_drop_mask * loss_mask).sum()
 
     def _construct_loss(self,
                         head_tag_representation: torch.Tensor,

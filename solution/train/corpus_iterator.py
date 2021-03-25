@@ -13,7 +13,8 @@ class Token:
     grammar_value: str = attr.ib()
     head: int = attr.ib()
     head_tag: str = attr.ib()
-    additional_label: str = attr.ib()
+    span_tag: str = attr.ib()
+    dataset_tag: str = attr.ib()
 
 
 class Sentence(object):
@@ -55,10 +56,16 @@ class Sentence(object):
         return [token.head_tag for token in self._tokens]
 
     @property
-    def additional_labels(self):
-        if not self._tokens or self._tokens[0].additional_label is None:
+    def span_tags(self):
+        if not self._tokens or self._tokens[0].span_tag is None:
             return None
-        return [token.additional_label for token in self._tokens]
+        return [token.span_tag for token in self._tokens]
+
+    @property
+    def dataset_tags(self):
+        if not self._tokens or self._tokens[0].dataset_tag is None:
+            return None
+        return [token.dataset_tag for token in self._tokens]
 
     def __len__(self):
         return len(self._tokens)
@@ -67,8 +74,8 @@ class Sentence(object):
 class CorpusIterator:
     def __init__(self, path: str, separator: str='\t', token_col_index: int=1, lemma_col_index: int=2,
                  grammar_val_col_indices: Tuple=(3, 5), grammemes_separator: str='|',
-                 head_col_index: int=6, head_tag_col_index: int=7, additional_label_index: int=None,
-                 column_count: int=None, skip_line_prefix: str='#', encoding: str='utf8'):
+                 head_col_index: int=6, head_tag_col_index: int=7, span_tag_index: int=None,
+                 dataset_tag_index: int=None, column_count: int=None, skip_line_prefix: str='#', encoding: str='utf8'):
         """
         Creates iterator over the corpus in conll-like format:
         - each line contains token and its annotations (lemma and grammar value info) separated by ``separator``
@@ -93,7 +100,8 @@ class CorpusIterator:
         self._head_col_index = head_col_index
         self._head_tag_col_index = head_tag_col_index
         self._skip_line_prefix = skip_line_prefix
-        self._additional_label_index = additional_label_index
+        self._span_tag_index = span_tag_index
+        self._dataset_tag_index = dataset_tag_index
         self._column_count = column_count
         self._encoding = encoding
 
@@ -115,6 +123,7 @@ class CorpusIterator:
 
         token_text = fields[self._token_col_index]
         lemma, pos_tag, grammar_value, head, head_tag = None, None, None, None, None
+        span_tag, dataset_tag = None, None
 
         if self._lemma_col_index is not None and self._lemma_col_index < len(fields):
             lemma = fields[self._lemma_col_index]
@@ -134,9 +143,13 @@ class CorpusIterator:
         if self._head_tag_col_index is not None and self._head_tag_col_index < len(fields):
             head_tag = fields[self._head_tag_col_index]
 
-        if self._additional_label_index is not None and self._additional_label_index < len(fields):
-            additional_label = fields[self._additional_label_index]
-            assert additional_label in ('O', 'B', 'I'), fields
+        if self._span_tag_index is not None and self._span_tag_index < len(fields):
+            span_tag = fields[self._span_tag_index]
+            assert span_tag in ('O', 'B', 'I'), fields
+
+        if self._dataset_tag_index is not None and self._dataset_tag_index < len(fields):
+            dataset_tag = fields[self._dataset_tag_index]
+            assert dataset_tag in ('generic', 'named'), fields
 
         return Token(
             text=token_text,
@@ -145,7 +158,8 @@ class CorpusIterator:
             grammar_value=grammar_value,
             head=head,
             head_tag=head_tag,
-            additional_label=additional_label,
+            span_tag=span_tag,
+            dataset_tag=dataset_tag,
         )
 
     def __next__(self) -> Sentence:
