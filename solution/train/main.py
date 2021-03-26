@@ -149,7 +149,7 @@ def build_config(config_dir, model, full_data, pretrained_models_dir=None, model
     return config
 
 
-def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=150, read_first=None):
+def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=200, read_first=None):
     indexers = {}
     for embedder_config in config.embedder.models:
         if embedder_config.name == 'elmo':
@@ -431,6 +431,7 @@ def main():
         help='Whether to train the model on the full train data'
              ' (it\'s useful when you\'re too lazy to specify all files)'
     )
+    parser.add_argument('--finetune-from', default=None)
     args = parser.parse_args()
 
     config = build_config(args.config_dir, args.model, args.full_data, args.pretrained_models_dir, args.models_dir)
@@ -446,20 +447,38 @@ def main():
     train_data, valid_data = _load_train_data(config)
     logger.info('Train data size = %s, valid data size = %s', len(train_data), len(valid_data))
 
-    lemmatize_helper = _build_lemmatizer(train_data)
-    lemmatize_helper.apply_to_instances(chain(train_data, valid_data))
+    lemmatize_helper = LemmatizeHelper.load(args.finetune_from)
 
     morpho_vectorizer = None
     if config.embedder.use_pymorphy:
         morpho_vectorizer = MorphoVectorizer()
         morpho_vectorizer.apply_to_instances(chain(train_data, valid_data))
 
-    vocab = Vocabulary.from_instances(chain(train_data, valid_data))
-    logger.info('Vocab = %s', vocab)
-    vocab.print_statistics()
+    vocab = Vocabulary.from_files('../models/tts_norm/vocab')
 
     model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
     logger.info('Model:\n%s', model)
+
+    if args.finetune_from:
+        logger.info('Loading model from %s', args.finetune_from)
+        skip_weights = {
+            '_head_sentinel',
+            'head_arc_feedforward._linear_layers.0.weight',
+            'child_arc_feedforward._linear_layers.0.weight',
+            'head_tag_feedforward._linear_layers.0.weight',
+            'child_tag_feedforward._linear_layers.0.weight',
+            '_gram_val_output.weight',
+            '_gram_val_output.bias',
+            '_lemma_output.weight',
+            '_lemma_output.bias',
+        }
+        state_dict = torch.load(os.path.join(args.finetune_from, 'best.th'), map_location='cpu')
+        state_dict = {key: val for key, val in state_dict.items() if key not in skip_weights}
+        missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=False)
+
+        logger.info('Missing keys:')
+        logger.info('\n'.join('\t' + key for key in missing_keys))
+        logger.info('\n'.join('\t' + key for key in unexpected_keys))
 
     vocab.save_to_files(os.path.join(model_dir, 'vocab'))
     lemmatize_helper.save(model_dir)

@@ -525,7 +525,7 @@ class DependencyParser(Model):
         if grammar_values is not None:
             grammar_nll = self._update_multiclass_prediction_metrics(
                 logits=grammar_value_logits, targets=grammar_values,
-                mask=token_mask, accuracy_metric=self._gram_val_prediction_accuracy
+                mask=token_mask, accuracy_metric=self._gram_val_prediction_accuracy, masked_index=0
             )
 
         lemma_nll = torch.tensor(0.)
@@ -552,12 +552,13 @@ class DependencyParser(Model):
 
     @staticmethod
     def _update_multiclass_prediction_metrics(logits, targets, mask, accuracy_metric, masked_index=None):
+        if masked_index is not None:
+            mask = mask * (targets != masked_index)
+
         accuracy_metric(logits, targets, mask)
 
         logits = logits.view(-1, logits.shape[-1])
         loss = F.cross_entropy(logits, targets.view(-1), reduction='none')
-        if masked_index is not None:
-            mask = mask * (targets != masked_index)
         loss_mask = mask.view(-1)
         return (loss * loss_mask).sum() / loss_mask.sum()
 

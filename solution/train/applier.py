@@ -83,13 +83,9 @@ def main():
                 for predictions in predictions_list:
                     for token_index in range(len(predictions['words'])):
                         word = predictions['words'][token_index]
-                        lemma = predictions['predicted_lemmas'][token_index]
-                        upos, feats = predictions['predicted_gram_vals'][token_index].split('|', 1)
-                        head_tag = predictions['predicted_dependencies'][token_index]
-                        head_index = predictions['predicted_heads'][token_index]
+                        gram_vals = predictions['predicted_gram_vals'][token_index]
 
-                        print(token_index + 1, word, lemma, upos, '_', feats,
-                              head_index, head_tag, '_', '_', sep='\t', file=f_out)
+                        print(token_index + 1, word, gram_vals, sep='\t', file=f_out)
                     print(file=f_out)
 
 

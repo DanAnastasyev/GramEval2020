@@ -29,7 +29,8 @@ class UDDatasetReader(DatasetReader):
 
     @overrides
     def _read(self, file_path: str):
-        with CorpusIterator(file_path) as corpus:
+        with CorpusIterator(file_path, lemma_col_index=None, grammar_val_col_indices=(2,),
+                            head_col_index=None, head_tag_col_index=None) as corpus:
             for sent_index, sentence in enumerate(corpus):
                 if self._max_length is not None and len(sentence) > self._max_length:
                     logger.info(
