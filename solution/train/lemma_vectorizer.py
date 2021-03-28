@@ -21,10 +21,10 @@ class LemmaVectorizer(object):
         self._lemmatize_helper = lemmatize_helper
 
     def vectorize_word(self, word):
-        lemma_vector = np.zeros(len(self._lemmatize_helper))
+        lemma_vector = np.zeros(self._lemmatize_helper.lemmatize_rule_count())
         for parse in self._morph.parse(word):
             for form in parse.lexeme:
-                lemma_id = self._lemmatize_helper.get_rule_index(word, form.word)
+                lemma_id, _ = self._lemmatize_helper.get_rule_index(word, form.word)
                 lemma_vector[lemma_id] = 1.
         return lemma_vector
 

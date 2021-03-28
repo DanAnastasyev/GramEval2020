@@ -255,7 +255,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
     if config.embedder.use_pymorphy:
         input_dim += morpho_vectorizer.morpho_vector_dim
     if config.embedder.use_lemmas:
-        input_dim += len(lemmatize_helper)
+        input_dim += lemmatize_helper.lemmatize_rule_count()
 
     pos_tag_embedding = None
     if config.task.task_type == 'single' and config.task.params['use_pos_tag']:
@@ -287,7 +287,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         task_config=config.task,
         pos_tag_embedding=pos_tag_embedding,
         morpho_vector_dim=morpho_vectorizer.morpho_vector_dim if config.embedder.use_pymorphy else 0,
-        lemma_vector_dim=len(lemmatize_helper) if config.embedder.use_lemmas else 0,
+        lemma_vector_dim=lemmatize_helper.lemmatize_rule_count() if config.embedder.use_lemmas else 0,
         tag_representation_dim=config.parser.tag_representation_dim,
         arc_representation_dim=config.parser.arc_representation_dim,
         dropout=config.parser.dropout,
@@ -479,6 +479,7 @@ def main():
             'head_tag_feedforward._linear_layers.0.weight',
             'child_tag_feedforward._linear_layers.0.weight',
             '_gram_val_output.weight',
+            '_gram_val_output.bias',
             '_lemma_output.weight',
             '_lemma_output.bias',
         }

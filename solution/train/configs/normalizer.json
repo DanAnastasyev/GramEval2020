@@ -1,5 +1,5 @@
 {
-  "model_name": "model_trainable_parser_lemmas",
+  "model_name": "model_trainable_parser_lemmas_factorized_5",
   "embedder": {
     "models": [
       {

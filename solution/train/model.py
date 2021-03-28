@@ -201,7 +201,7 @@ class DependencyParser(Model):
                  use_mst_decoding_for_validation: bool = True,
                  dropout: float = 0.0,
                  input_dropout: float = 0.0,
-                 loss_dropper_config: None,
+                 loss_dropper_config: dict = None,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(DependencyParser, self).__init__(vocab, regularizer)
@@ -256,13 +256,23 @@ class DependencyParser(Model):
             )
 
         if lemma_representation_dim <= 0:
-            self._lemma_output = torch.nn.Linear(encoder_dim, len(lemmatize_helper))
+            self._lemma_output = torch.nn.Linear(encoder_dim, lemmatize_helper.lemmatize_rule_count())
         else:
             self._lemma_output = torch.nn.Sequential(
                 Dropout(dropout),
                 torch.nn.Linear(encoder_dim, lemma_representation_dim),
                 Dropout(dropout),
-                torch.nn.Linear(lemma_representation_dim, len(lemmatize_helper))
+                torch.nn.Linear(lemma_representation_dim, lemmatize_helper.lemmatize_rule_count())
+            )
+
+        if lemma_representation_dim <= 0:
+            self._capitalize_output = torch.nn.Linear(encoder_dim, lemmatize_helper.capitalize_rule_count())
+        else:
+            self._capitalize_output = torch.nn.Sequential(
+                Dropout(dropout),
+                torch.nn.Linear(encoder_dim, lemma_representation_dim),
+                Dropout(dropout),
+                torch.nn.Linear(lemma_representation_dim, lemmatize_helper.capitalize_rule_count())
             )
 
         self.use_mst_decoding_for_validation = use_mst_decoding_for_validation
@@ -276,6 +286,7 @@ class DependencyParser(Model):
         self._attachment_scores = AttachmentScores()
         self._gram_val_prediction_accuracy = CategoricalAccuracy()
         self._lemma_prediction_accuracy = CategoricalAccuracy()
+        self._capitalize_prediction_accuracy = CategoricalAccuracy()
 
         self._loss_dropper = None
         if loss_dropper_config is not None:
@@ -294,6 +305,7 @@ class DependencyParser(Model):
                 head_indices: torch.LongTensor = None,
                 grammar_values: torch.LongTensor = None,
                 lemma_indices: torch.LongTensor = None,
+                capitalize_indices: torch.LongTensor = None,
                 span_tags: torch.LongTensor = None,
                 dataset_tags: torch.LongTensor = None,) -> Dict[str, torch.Tensor]:
         # pylint: disable=arguments-differ
@@ -371,16 +383,17 @@ class DependencyParser(Model):
         mask = get_text_field_mask(words)
 
         output_dict = self._parse(
-            embedded_text_input, mask, head_tags, head_indices, grammar_values, lemma_indices, lemma_embedding
+            embedded_text_input, mask, head_tags, head_indices, grammar_values,
+            lemma_indices, capitalize_indices, lemma_embedding
         )
 
         if self.task_config.task_type == "multitask":
-            losses = ["arc_nll", "tag_nll", "grammar_nll", "lemma_nll"]
+            losses = ["arc_nll", "tag_nll", "grammar_nll", "lemma_nll", "capitalize_nll"]
         elif self.task_config.task_type == "single":
             if self.task_config.params["model"] == "morphology":
                 losses = ["grammar_nll"]
             elif self.task_config.params["model"] == "lemmatization":
-                losses = ["lemma_nll"]
+                losses = ["lemma_nll", "capitalize_nll"]
             elif self.task_config.params["model"] == "syntax":
                 losses = ["arc_nll", "tag_nll"]
             else:
@@ -413,6 +426,7 @@ class DependencyParser(Model):
         heads = output_dict.pop("heads").cpu().detach().numpy()
         predicted_gram_vals = output_dict.pop("gram_vals").cpu().detach().numpy()
         predicted_lemmas = output_dict.pop("lemmas").cpu().detach().numpy()
+        predicted_capitalization = output_dict.pop("capitalization").cpu().detach().numpy()
         predicted_pymorphy_lemmas = output_dict.pop("pymorphy_lemmas").cpu().detach().numpy()
         mask = output_dict.pop("mask")
         lengths = get_lengths_from_binary_sequence_mask(mask)
@@ -425,6 +439,7 @@ class DependencyParser(Model):
             words, length = output_dict["words"][instance_index], lengths[instance_index]
             gram_vals, lemmas = predicted_gram_vals[instance_index], predicted_lemmas[instance_index]
             pymorphy_lemmas = predicted_pymorphy_lemmas[instance_index]
+            capitalization = predicted_capitalization[instance_index]
 
             words = words[: length.item() - 1]
             gram_vals = gram_vals[: length.item() - 1]
@@ -442,13 +457,13 @@ class DependencyParser(Model):
             ])
 
             decoded_lemmas.append([
-                self.lemmatize_helper.lemmatize(word, lemmatize_rule_index)
-                for word, lemmatize_rule_index in zip(words, lemmas)
+                self.lemmatize_helper.lemmatize(word, lemmatize_rule_index, capitalize_rule_index)
+                for word, lemmatize_rule_index, capitalize_rule_index in zip(words, lemmas, capitalization)
             ])
 
             decoded_pymorphy_lemmas.append([
-                self.lemmatize_helper.lemmatize(word, lemmatize_rule_index)
-                for word, lemmatize_rule_index in zip(words, pymorphy_lemmas)
+                self.lemmatize_helper.lemmatize(word, lemmatize_rule_index, capitalize_rule_index)
+                for word, lemmatize_rule_index, capitalize_rule_index in zip(words, pymorphy_lemmas, capitalization)
             ])
 
         if self.task_config.task_type == "multitask":
@@ -480,6 +495,7 @@ class DependencyParser(Model):
                head_indices: torch.LongTensor = None,
                grammar_values: torch.LongTensor = None,
                lemma_indices: torch.LongTensor = None,
+               capitalize_indices: torch.LongTensor = None,
                lemma_embedding: torch.FloatTensor = None):
 
         embedded_text_input = self._input_dropout(embedded_text_input)
@@ -490,6 +506,9 @@ class DependencyParser(Model):
 
         lemma_logits = self._lemma_output(encoded_text)
         predicted_lemmas = lemma_logits.argmax(-1)
+
+        capitalize_logits = self._capitalize_output(encoded_text)
+        predicted_capitalization = capitalize_logits.argmax(-1)
 
         lemma_embedding[:, :, 0] = 0.
         pymorphy_predicted_lemmas = (lemma_logits * lemma_embedding).argmax(-1)
@@ -567,17 +586,27 @@ class DependencyParser(Model):
                 masked_index=self.lemmatize_helper.UNKNOWN_RULE_INDEX
             )
 
+        capitalize_nll = torch.tensor(0.)
+        if capitalize_indices is not None:
+            capitalize_nll = self._update_multiclass_prediction_metrics(
+                logits=capitalize_logits, targets=capitalize_indices,
+                mask=token_mask, accuracy_metric=self._capitalize_prediction_accuracy,
+                masked_index=self.lemmatize_helper.UNKNOWN_RULE_INDEX
+            )
+
         output_dict = {
             "heads": predicted_heads,
             "head_tags": predicted_head_tags,
             "gram_vals": predicted_gram_vals,
             "lemmas": predicted_lemmas,
+            "capitalization": predicted_capitalization,
             "pymorphy_lemmas": pymorphy_predicted_lemmas,
             "mask": mask,
             "arc_nll": arc_nll,
             "tag_nll": tag_nll,
             "grammar_nll": grammar_nll,
             "lemma_nll": lemma_nll,
+            "capitalize_nll": capitalize_nll,
         }
 
         return output_dict
@@ -903,6 +932,9 @@ class DependencyParser(Model):
         metrics = self._attachment_scores.get_metric(reset)
         metrics['GramValAcc'] = self._gram_val_prediction_accuracy.get_metric(reset)
         metrics['LemmaAcc'] = self._lemma_prediction_accuracy.get_metric(reset)
-        metrics['MeanAcc'] = (metrics['GramValAcc'] + metrics['LemmaAcc'] + metrics['LAS']) / 3.
+        metrics['CapitalizeAcc'] = self._capitalize_prediction_accuracy.get_metric(reset)
+
+        metrics['MeanAcc'] = [metrics['GramValAcc'], metrics['LemmaAcc'], metrics['CapitalizeAcc'], metrics['LAS']]
+        metrics['MeanAcc'] = sum(metrics['MeanAcc']) / len(metrics['MeanAcc'])
 
         return metrics
