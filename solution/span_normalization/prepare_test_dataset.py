@@ -49,10 +49,16 @@ def process_file(data_type, file_id):
                     spaces.append('')
 
             for span_token_ids, (span_idx, _) in zip(spans_token_ids, spans):
+                is_first = True
                 for token_idx, (span_sent_index, span_token_index) in enumerate(span_token_ids):
-                    if span_sent_index == sent_index:
-                        labels[span_token_index] = 'I' if token_idx > 0 else 'B'
-                        indices[span_token_index] = ','.join(map(str, [data_type, file_id, span_idx, token_idx]))
+                    if span_sent_index != sent_index:
+                        continue
+                    if is_first:
+                        labels[span_token_index] = 'B'
+                        is_first = False
+                    else:
+                        labels[span_token_index] = 'I'
+                    indices[span_token_index] = ','.join(map(str, [data_type, file_id, span_idx, token_idx]))
 
             if all(label == 'O' for label in labels):
                 continue
@@ -89,6 +95,9 @@ def write_dataset(dataset, data_split):
 
 
 def main():
+    os.makedirs('../data/span_normalization/valid', exist_ok=True)
+    os.makedirs('../data/span_normalization/test', exist_ok=True)
+
     for data_split in ['valid', 'test']:
         dataset = collect_dataset(data_split)
         write_dataset(dataset, data_split)

@@ -8,9 +8,96 @@ import re
 from difflib import SequenceMatcher
 from razdel import sentenize
 from razdel.segmenters.tokenize import TokenSegmenter, DebugTokenSegmenter, Rule2112, RULES, DASHES, PUNCT, JOIN
+from string import punctuation
 from tqdm import tqdm
 
 MORPH = pymorphy2.MorphAnalyzer()
+
+
+_ALLOWED_ALIGNMENTS = {
+    ('й', 'я'),
+    ('меньше', 'малый'),
+    ('реализуются', 'реализовываться'),
+    ('утвержденной', 'утверждать'),
+    ('реализуется', 'реализовываться'),
+    ('направлены', 'направлять'),
+    ('го', 'й'),
+    ('MC', 'МС'),
+    ('Олы', 'Ола'),
+    ('организует', 'организовывать'),
+    ('ведется', 'вести'),
+    ('снизился', 'снизить'),
+    ('реализуется', 'реализовать'),
+    ('возросло', 'возрастать'),
+    ('формируются', 'формировать'),
+    ('более', 'больший'),
+    ('м', 'й'),
+    ('му', 'й'),
+    ('Оле', 'Ола'),
+    ('создаются', 'создавать'),
+    ('установка', 'установление'),
+    ('образованная', 'образовывать'),
+    ('отражены', 'отражать'),
+    ('усилилась', 'усиливаться'),
+    ('сформироваться', 'сформирует'),
+    ('устанавливаемых', 'установить'),
+    ('Произведено', 'Производить'),
+    ('увеличились', 'увеличиваться'),
+    ('увеличилось', 'увеличиваться'),
+    ('возросла', 'возрастать'),
+    ('возросли', 'возрастать'),
+    ('получили', 'получать'),
+    ('повышенными', 'повышать'),
+    ('решен', 'решать'),
+    ('выверенно', 'выверять'),
+    ('реализованных', 'реализовывать'),
+    ('созданная', 'создавать'),
+    ('снижен', 'снижать'),
+    ('запущен', 'запускать'),
+    ('реализуемых', 'реализовывать'),
+    ('Планируется', 'Планировать'),
+    ('производимых', 'произвести'),
+    ('реализующим', 'реализовывать'),
+    ('планируется', 'планировать'),
+    ('намерены', 'намериться'),
+    ('имеющихся', 'иметь'),
+    ('создаваемых', 'создать'),
+    ('связующего', 'связывать'),
+    ('имеющиеся', 'иметь'),
+    ('отраженная', 'отражать'),
+    ('меняющимся', 'менять'),
+    ('развивающейся', 'развивать'),
+    ('Установлены', 'Устанавливать'),
+    ('реализует', 'реализовывать'),
+    ('получены', 'получать'),
+    ('возникших', 'возникать'),
+    ('строящегося', 'строить'),
+    ('строящееся', 'строить'),
+    ('рассовой', 'расовая'),
+    ('Лешиному', 'Лёша'),
+    ('Гру', 'Гра'),
+    ('Гры', 'Гра'),
+    ('BBC', 'ВВС'),
+    ('определены', 'определять'),
+    ('признается', 'признавать'),
+    ('Совершенствуется', 'совершенствовать'),
+    ('открылся', 'открыть'),
+    ('превышает', 'превысить'),
+    ('установленными', 'устанавливать'),
+}
+
+_PUNCT_FIXES = [
+    ('–', '-'),
+    ('-', '–'),
+    ('»', '"'),
+    ('«', '"'),
+    ('’', "'"),
+    ('"', '«'),
+]
+
+_BE = ('будет', 'будут', 'был', 'была', 'было', 'были')
+
+_IS_PUNCT = re.compile(f'[{punctuation}]+')
 
 
 class MyDashRule(Rule2112):
@@ -95,23 +182,94 @@ def normalize(text):
     return text.lower().replace('ё', 'е')
 
 
+def can_align_tokens(token_1, token_2):
+    if (token_1, token_2) in _ALLOWED_ALIGNMENTS:
+        return True
+    if SequenceMatcher(None, token_1, token_2).ratio() > 0.7:
+        return True
+
+    parses_1 = MORPH.parse(token_1)
+    parses_2 = MORPH.parse(token_2)
+    lemmas_1 = [normalize(token_1)] + [normalize(parse.normal_form) for parse in parses_1]
+    lemmas_2 = [normalize(token_2)] + [normalize(parse.normal_form) for parse in parses_2]
+
+    if len(set(lemmas_1) & set(lemmas_2)) == 0:
+        return False
+    return True
+
+
 def can_align_normalization(span_tokens, normalization_tokens):
     if len(span_tokens) != len(normalization_tokens):
         return False
 
+    has_error = False
     for token_1, token_2 in zip(span_tokens, normalization_tokens):
-        if SequenceMatcher(None, token_1.text, token_2).ratio() > 0.7:
+        has_error = can_align_tokens(token_1.text, token_2) or has_error
+
+    return has_error
+
+
+def try_fix_normalization_tokens(span_tokens, norm_tokens):
+    # if len(span_tokens) == 2 and len(norm_tokens) == 1 and span_tokens[0].text in _BE:
+    #     return ['~'] + norm_tokens
+
+    norm_token_index = 0
+    span_token_index = 0
+    updated_norm_tokens = []
+    while span_token_index < len(span_tokens) and norm_token_index < len(norm_tokens):
+        was_found = False
+        for from_punct, to_punct in _PUNCT_FIXES:
+            if span_tokens[span_token_index].text == from_punct and norm_tokens[norm_token_index] == to_punct:
+                span_token_index += 1
+                norm_token_index += 1
+                updated_norm_tokens.append(from_punct)
+                was_found = True
+                break
+        if was_found:
             continue
 
-        parses_1 = MORPH.parse(token_1.text)
-        parses_2 = MORPH.parse(token_2)
-        lemmas_1 = [normalize(token_1.text)] + [normalize(parse.normal_form) for parse in parses_1]
-        lemmas_2 = [normalize(token_2)] + [normalize(parse.normal_form) for parse in parses_2]
+        if can_align_tokens(span_tokens[span_token_index].text, norm_tokens[norm_token_index]):
+            updated_norm_tokens.append(norm_tokens[norm_token_index])
+            span_token_index += 1
+            norm_token_index += 1
+            continue
 
-        if len(set(lemmas_1) & set(lemmas_2)) == 0:
-            return False
+        if norm_tokens[norm_token_index].lower().startswith(span_tokens[span_token_index].text.lower()):
+            norm_suffix = norm_tokens[norm_token_index][len(span_tokens[span_token_index].text):]
+            if (span_token_index + 1 < len(span_tokens)
+                and can_align_tokens(span_tokens[span_token_index + 1].text, norm_suffix)
+            ):
+                updated_norm_tokens.append(span_tokens[span_token_index].text)
+                updated_norm_tokens.append(norm_suffix)
+                span_token_index += 2
+                norm_token_index += 1
+                continue
 
-    return True
+        if (norm_tokens[norm_token_index] == '-'
+            and norm_token_index + 1 < len(norm_tokens)
+            and can_align_tokens(span_tokens[span_token_index].text, norm_tokens[norm_token_index + 1])
+        ):
+            updated_norm_tokens[-1] += '-'
+            updated_norm_tokens.append(norm_tokens[norm_token_index + 1])
+            span_token_index += 1
+            norm_token_index += 2
+            continue
+
+        if _IS_PUNCT.match(span_tokens[span_token_index].text) and not _IS_PUNCT.match(norm_tokens[norm_token_index]):
+            updated_norm_tokens.append(span_tokens[span_token_index].text)
+            span_token_index += 1
+            continue
+
+        if not _IS_PUNCT.match(span_tokens[span_token_index].text) and _IS_PUNCT.match(norm_tokens[norm_token_index]):
+            updated_norm_tokens[-1] += norm_tokens[norm_token_index]
+            norm_token_index += 1
+            continue
+
+        return
+
+    if norm_token_index == len(norm_tokens) and span_token_index == len(span_tokens):
+        assert len(updated_norm_tokens) == len(span_tokens)
+        return updated_norm_tokens
 
 
 def should_remove(spans, i, spans_to_remove):
@@ -154,8 +312,7 @@ def process_file(data_type, file_id):
         for normalization, span in normalizations:
             span_token_ids = collect_span_tokens(sentence_tokens, span, file_id)
             if not span_token_ids:
-                continue
-            if not all(span_token_id[0] == span_token_ids[0][0] for span_token_id in span_token_ids):
+                print(f'Skipping: {normalization} -> {span}')
                 continue
 
             span_tokens = [sentence_tokens[span[0]][span[1]] for span in span_token_ids]
@@ -163,6 +320,13 @@ def process_file(data_type, file_id):
             if can_align_normalization(span_tokens, normalization_tokens):
                 spans_token_ids.append(span_token_ids)
                 normalizations_tokens.append(normalization_tokens)
+            else:
+                normalization_tokens = try_fix_normalization_tokens(span_tokens, normalization_tokens)
+                if normalization_tokens and can_align_normalization(span_tokens, normalization_tokens):
+                    spans_token_ids.append(span_token_ids)
+                    normalizations_tokens.append(normalization_tokens)
+                else:
+                    print(f'Cannot align {span_tokens} with {normalization}')
 
         for sent_index, sentence in enumerate(sentence_tokens):
             tokens = [token.text for token in sentence]
@@ -212,6 +376,9 @@ def write_dataset(dataset, data_split):
 
 
 def main():
+    os.makedirs('../data/span_normalization/data_train', exist_ok=True)
+    os.makedirs('../data/span_normalization/data_open_test', exist_ok=True)
+
     for data_split in ['train', 'valid']:
         dataset = collect_dataset(data_split)
         write_dataset(dataset, data_split)
