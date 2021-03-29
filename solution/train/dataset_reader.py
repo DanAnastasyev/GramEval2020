@@ -20,17 +20,32 @@ logger = logging.getLogger(__name__)
 @DatasetReader.register('ud')
 class UDDatasetReader(DatasetReader):
     def __init__(self, token_indexers: Dict[str, TokenIndexer] = None, skip_labels=False,
-                 max_length=None, read_first=None, **kwargs) -> None:
+                 max_length=None, read_first=None, is_train=True, **kwargs) -> None:
         super().__init__(**kwargs)
         self._token_indexers = token_indexers or {'tokens': SingleIdTokenIndexer()}
         self._skip_labels = skip_labels
         self._max_length = max_length
         self._read_first = read_first
+        if is_train:
+            self._iter_kwargs = {
+                'span_tag_index': 3,
+                'dataset_tag_index': 4,
+                'grammar_val_col_indices': (5, 6),
+                'head_col_index': 7,
+                'head_tag_col_index': 8
+            }
+        else:
+            self._iter_kwargs = {
+                'span_tag_index': 3,
+                'dataset_tag_index': 4,
+                'grammar_val_col_indices': None,
+                'head_col_index': None,
+                'head_tag_col_index': None
+            }
 
     @overrides
     def _read(self, file_path: str):
-        with CorpusIterator(file_path, span_tag_index=3, dataset_tag_index=4, grammar_val_col_indices=None,
-                            head_col_index=None, head_tag_col_index=None) as corpus:
+        with CorpusIterator(file_path, **self._iter_kwargs) as corpus:
             for sent_index, sentence in enumerate(corpus):
                 if self._max_length is not None and len(sentence) > self._max_length:
                     logger.info(

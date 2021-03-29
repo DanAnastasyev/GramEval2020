@@ -68,6 +68,7 @@ class ParserConfig(object):
     arc_representation_dim = attr.ib(default=512)
     gram_val_representation_dim = attr.ib(default=-1)
     lemma_representation_dim = attr.ib(default=-1)
+    dataset_tag_skip_connection = attr.ib(default=False)
 
 
 @attr.s
@@ -153,7 +154,7 @@ def build_config(config_dir, model, full_data, pretrained_models_dir=None, model
     return config
 
 
-def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=200, read_first=None):
+def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_length=200, read_first=None, is_train=True):
     indexers = {}
     for embedder_config in config.embedder.models:
         if embedder_config.name == 'elmo':
@@ -169,7 +170,8 @@ def _get_reader(config, skip_labels=False, bert_max_length=None, reader_max_leng
         else:
             assert False, 'Unknown embedder {}'.format(embedder_config.name)
 
-    return UDDatasetReader(indexers, skip_labels=skip_labels, max_length=reader_max_length, read_first=read_first)
+    return UDDatasetReader(indexers, skip_labels=skip_labels, max_length=reader_max_length,
+                           read_first=read_first, is_train=is_train)
 
 
 def _load_train_data(config):
@@ -295,6 +297,7 @@ def _build_model(config, vocab, lemmatize_helper, morpho_vectorizer, bert_max_le
         gram_val_representation_dim=config.parser.gram_val_representation_dim,
         lemma_representation_dim=config.parser.lemma_representation_dim,
         loss_dropper_config=config.trainer.loss_dropper_config,
+        dataset_tag_skip_connection=config.parser.dataset_tag_skip_connection,
     )
 
 
@@ -411,7 +414,7 @@ def _build_trainer(config, model, vocab, train_data, valid_data):
         iterator=iterator,
         train_dataset=train_data,
         validation_dataset=valid_data,
-        validation_metric='+MeanAcc',
+        validation_metric='+LemmatizationAcc',
         patience=config.trainer.patience,
         num_epochs=config.trainer.num_epochs,
         cuda_device=cuda_device,
@@ -469,17 +472,11 @@ def main():
 
     vocab = Vocabulary.from_files('../models/span_normalization/vocab')
     model = _build_model(config, vocab, lemmatize_helper, morpho_vectorizer)
+    logger.info('Model:\n%s', model)
 
     if args.finetune_from:
         logger.info('Loading model from %s', args.finetune_from)
         skip_weights = {
-            '_head_sentinel',
-            'head_arc_feedforward._linear_layers.0.weight',
-            'child_arc_feedforward._linear_layers.0.weight',
-            'head_tag_feedforward._linear_layers.0.weight',
-            'child_tag_feedforward._linear_layers.0.weight',
-            '_gram_val_output.weight',
-            '_gram_val_output.bias',
             '_lemma_output.weight',
             '_lemma_output.bias',
         }

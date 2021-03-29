@@ -10,6 +10,7 @@ import pymorphy2
 from tqdm import tqdm
 
 from pymorphy2.units.by_analogy import KnownSuffixAnalyzer
+from pymorphy2.units.unkn import UnknAnalyzer
 
 from allennlp.data.vocabulary import Vocabulary
 
@@ -26,7 +27,8 @@ _MORPH = pymorphy2.MorphAnalyzer()
 
 
 def _is_unknown(parse):
-    return any(isinstance(unit[0], KnownSuffixAnalyzer.FakeDictionary) for unit in parse.methods_stack)
+    return any(isinstance(unit[0], (UnknAnalyzer, KnownSuffixAnalyzer.FakeDictionary))
+               for unit in parse.methods_stack)
 
 
 def choose_lemma(word, lemma, pymorphy_lemma):
@@ -90,7 +92,8 @@ def main():
     model.eval()
     logger.info('Model: %s', model)
 
-    reader = _get_reader(config, skip_labels=True, bert_max_length=BERT_MAX_LENGTH, reader_max_length=None)
+    reader = _get_reader(config, skip_labels=True, bert_max_length=BERT_MAX_LENGTH,
+                         reader_max_length=None, is_train=False)
 
     for path in os.listdir(args.data_dir):
         if not path.endswith('.conllu'):

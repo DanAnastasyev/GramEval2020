@@ -202,6 +202,7 @@ class DependencyParser(Model):
                  dropout: float = 0.0,
                  input_dropout: float = 0.0,
                  loss_dropper_config: dict = None,
+                 dataset_tag_skip_connection: bool = False,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(DependencyParser, self).__init__(vocab, regularizer)
@@ -211,7 +212,7 @@ class DependencyParser(Model):
         self.lemmatize_helper = lemmatize_helper
         self.task_config = task_config
 
-        encoder_dim = encoder.get_output_dim()
+        encoder_dim = text_field_embedder.get_output_dim()
 
         self.head_arc_feedforward = arc_feedforward or \
                                         FeedForward(encoder_dim, 1,
@@ -240,10 +241,16 @@ class DependencyParser(Model):
 
         self._dropout = InputVariationalDropout(dropout)
         self._input_dropout = Dropout(input_dropout)
-        self._head_sentinel = torch.nn.Parameter(torch.randn([1, 1, encoder.get_output_dim()]))
+        self._head_sentinel = torch.nn.Parameter(torch.randn([1, 1, encoder_dim]))
 
         self._span_label_embedding = torch.nn.Embedding(3, 8)
         self._dataset_label_embedding = torch.nn.Embedding(2, 8)
+
+        self._dataset_label_skip_embedding = None
+        lemma_output_in_dim = encoder.get_output_dim()
+        if dataset_tag_skip_connection:
+            self._dataset_label_skip_embedding = torch.nn.Embedding(2, 8)
+            lemma_output_in_dim += 8
 
         if gram_val_representation_dim <= 0:
             self._gram_val_output = torch.nn.Linear(encoder_dim, self.vocab.get_vocab_size("grammar_value_tags"))
@@ -256,21 +263,21 @@ class DependencyParser(Model):
             )
 
         if lemma_representation_dim <= 0:
-            self._lemma_output = torch.nn.Linear(encoder_dim, lemmatize_helper.lemmatize_rule_count())
+            self._lemma_output = torch.nn.Linear(lemma_output_in_dim, lemmatize_helper.lemmatize_rule_count())
         else:
             self._lemma_output = torch.nn.Sequential(
                 Dropout(dropout),
-                torch.nn.Linear(encoder_dim, lemma_representation_dim),
+                torch.nn.Linear(lemma_output_in_dim, lemma_representation_dim),
                 Dropout(dropout),
                 torch.nn.Linear(lemma_representation_dim, lemmatize_helper.lemmatize_rule_count())
             )
 
         if lemma_representation_dim <= 0:
-            self._capitalize_output = torch.nn.Linear(encoder_dim, lemmatize_helper.capitalize_rule_count())
+            self._capitalize_output = torch.nn.Linear(lemma_output_in_dim, lemmatize_helper.capitalize_rule_count())
         else:
             self._capitalize_output = torch.nn.Sequential(
                 Dropout(dropout),
-                torch.nn.Linear(encoder_dim, lemma_representation_dim),
+                torch.nn.Linear(lemma_output_in_dim, lemma_representation_dim),
                 Dropout(dropout),
                 torch.nn.Linear(lemma_representation_dim, lemmatize_helper.capitalize_rule_count())
             )
@@ -384,7 +391,7 @@ class DependencyParser(Model):
 
         output_dict = self._parse(
             embedded_text_input, mask, head_tags, head_indices, grammar_values,
-            lemma_indices, capitalize_indices, lemma_embedding
+            lemma_indices, capitalize_indices, lemma_embedding, dataset_tags
         )
 
         if self.task_config.task_type == "multitask":
@@ -496,18 +503,22 @@ class DependencyParser(Model):
                grammar_values: torch.LongTensor = None,
                lemma_indices: torch.LongTensor = None,
                capitalize_indices: torch.LongTensor = None,
-               lemma_embedding: torch.FloatTensor = None):
+               lemma_embedding: torch.FloatTensor = None,
+               dataset_tags: torch.LongTensor = None):
 
-        embedded_text_input = self._input_dropout(embedded_text_input)
-        encoded_text = self.encoder(embedded_text_input, mask)
+        encoded_text = self._input_dropout(embedded_text_input[..., :768])
+        lemma_encoded_text = self.encoder(self._input_dropout(embedded_text_input), mask)
+
+        if self._dataset_label_skip_embedding:
+            lemma_encoded_text = torch.cat([lemma_encoded_text, self._dataset_label_skip_embedding(dataset_tags)], -1)
 
         grammar_value_logits = self._gram_val_output(encoded_text)
         predicted_gram_vals = grammar_value_logits.argmax(-1)
 
-        lemma_logits = self._lemma_output(encoded_text)
+        lemma_logits = self._lemma_output(lemma_encoded_text)
         predicted_lemmas = lemma_logits.argmax(-1)
 
-        capitalize_logits = self._capitalize_output(encoded_text)
+        capitalize_logits = self._capitalize_output(lemma_encoded_text)
         predicted_capitalization = capitalize_logits.argmax(-1)
 
         lemma_embedding[:, :, 0] = 0.
@@ -936,5 +947,7 @@ class DependencyParser(Model):
 
         metrics['MeanAcc'] = [metrics['GramValAcc'], metrics['LemmaAcc'], metrics['CapitalizeAcc'], metrics['LAS']]
         metrics['MeanAcc'] = sum(metrics['MeanAcc']) / len(metrics['MeanAcc'])
+
+        metrics['LemmatizationAcc'] = metrics['LemmaAcc'] * metrics['CapitalizeAcc']
 
         return metrics
